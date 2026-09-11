@@ -39,6 +39,8 @@ h1, h2, h3, p, td { overflow-wrap: anywhere; }
 .mobile-menu-btn { display: none; }
 .logout-btn { min-height: 36px; padding-inline: 9px; }
 .user-chip { display: flex; align-items: center; gap: 9px; padding: 5px 9px 5px 5px; border: 1px solid var(--line); border-radius: 999px; background: white; }
+.user-chip--link:hover, .user-chip--link:focus-visible { border-color: var(--brand); background: var(--brand-soft); }
+.user-chip--static { cursor: default; }
 .avatar { display: inline-grid; place-items: center; flex-shrink: 0; width: 38px; height: 38px; border-radius: 50%; background: var(--brand-soft); color: var(--brand-dark); font-size: 13px; font-weight: 800; }
 .avatar.lg { width: 72px; height: 72px; font-size: 22px; }
 .user-chip span:last-child { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 700; }

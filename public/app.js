@@ -125,7 +125,11 @@ function renderHeader() {
   const user = state.bootstrap?.user;
   const current = location.pathname;
   const active = (path) => current === path || (path !== '/' && current.startsWith(path)) ? 'active' : '';
-  const accountHref = user?.isAdmin ? '/admin' : isExecutor(user) ? '/profile/me' : '/my-tasks';
+  const userChip = !user
+    ? ''
+    : isExecutor(user)
+      ? `<a class="user-chip user-chip--link" href="/profile/me" data-link title="Открыть профиль компетенций"><span class="avatar">${esc(initials(user.name))}</span><span>${esc(user.name)}</span></a>`
+      : `<div class="user-chip user-chip--static" aria-label="Текущий пользователь: ${esc(user.name)}"><span class="avatar">${esc(initials(user.name))}</span><span>${esc(user.name)}</span></div>`;
   header.innerHTML = `
     <div class="header-inner">
       <a class="brand" href="/" data-link><span class="brand-mark">Т</span><span><b>Биржа талантов</b><small>Город находит тех, кто умеет</small></span></a>
@@ -139,7 +143,7 @@ function renderHeader() {
       <div class="header-actions">
         ${user ? `
           ${isCustomer(user) ? '<a class="btn btn-primary hide-mobile" href="/tasks/create" data-link>Создать задачу</a>' : ''}
-          <a class="user-chip" href="${accountHref}" data-link title="${isExecutor(user) ? 'Мой профиль' : 'Мой кабинет'}"><span class="avatar">${esc(initials(user.name))}</span><span>${esc(user.name)}</span></a>
+          ${userChip}
           <button class="btn btn-ghost logout-btn" data-action="logout" aria-label="Выйти из аккаунта">Выйти</button>
         ` : `
           <a class="btn btn-ghost" href="/login" data-link>Войти</a>
