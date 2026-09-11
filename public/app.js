@@ -129,7 +129,9 @@ function renderHeader() {
     ? ''
     : isExecutor(user)
       ? `<a class="user-chip user-chip--link" href="/profile/me" data-link title="Открыть профиль компетенций"><span class="avatar">${esc(initials(user.name))}</span><span>${esc(user.name)}</span></a>`
-      : `<div class="user-chip user-chip--static" aria-label="Текущий пользователь: ${esc(user.name)}"><span class="avatar">${esc(initials(user.name))}</span><span>${esc(user.name)}</span></div>`;
+      : isCustomer(user)
+        ? `<a class="user-chip user-chip--link" href="/my-tasks" data-link title="Открыть мои задачи"><span class="avatar">${esc(initials(user.name))}</span><span>${esc(user.name)}</span></a>`
+        : `<div class="user-chip user-chip--static" aria-label="Текущий пользователь: ${esc(user.name)}"><span class="avatar">${esc(initials(user.name))}</span><span>${esc(user.name)}</span></div>`;
   header.innerHTML = `
     <div class="header-inner">
       <a class="brand" href="/" data-link><span class="brand-mark">Т</span><span><b>Биржа талантов</b><small>Город находит тех, кто умеет</small></span></a>

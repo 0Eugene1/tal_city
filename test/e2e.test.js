@@ -318,6 +318,7 @@ test('критичные клиентские маршруты и страниц
   assert.match(clientScript, /safeNext/);
   assert.match(clientScript, /user-chip user-chip--link/);
   assert.match(clientScript, /user-chip user-chip--static/);
+  assert.match(clientScript, /href="\/my-tasks" data-link title="Открыть мои задачи"/);
   assert.doesNotMatch(clientScript, /const accountHref/);
   await assert.rejects(client().request('/api/tasks/999999999'), /Задача не найдена/);
 });
