@@ -195,7 +195,7 @@ function seed() {
 
     insertUser.run('Администратор пилота', 'admin@talent.city', demoPassword, 'CUSTOMER', 1, timestamp);
     const customer = insertUser.run('Мария Соколова', 'customer@demo.city', demoPassword, 'CUSTOMER', 0, timestamp).lastInsertRowid;
-    insertUser.run('Центр городских инициатив', 'projects@demo.city', demoPassword, 'CUSTOMER', 0, timestamp);
+    const projects = insertUser.run('Центр городских инициатив', 'projects@demo.city', demoPassword, 'CUSTOMER', 0, timestamp).lastInsertRowid;
 
     for (const [name, email, skills, bio, experience, location, format, rate] of seedExecutors) {
       const userId = insertUser.run(name, email, demoPassword, 'EXECUTOR', 0, timestamp).lastInsertRowid;
@@ -205,8 +205,9 @@ function seed() {
     const insertTask = db.prepare(`INSERT INTO tasks
       (title, description, expected_result, category, skills, budget, deadline, location, format, customer_id, status, created_at, updated_at, published_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PUBLISHED', ?, ?, ?)`);
-    for (const [title, description, result, category, skills, budget, deadline, location, format] of seedTasks) {
-      insertTask.run(title, description, result, category, JSON.stringify(skills), budget, deadline, location, format, customer, timestamp, timestamp, timestamp);
+    for (const [index, [title, description, result, category, skills, budget, deadline, location, format]] of seedTasks.entries()) {
+      const ownerId = index < 2 ? customer : projects;
+      insertTask.run(title, description, result, category, JSON.stringify(skills), budget, deadline, location, format, ownerId, timestamp, timestamp, timestamp);
     }
 
     db.exec('COMMIT');
@@ -327,3 +328,23 @@ function seedProductDemo() {
 }
 
 seedProductDemo();
+
+function normalizeDemoTaskOwnership() {
+  const customer = db.prepare("SELECT id FROM users WHERE email='customer@demo.city'").get();
+  const projects = db.prepare("SELECT id FROM users WHERE email='projects@demo.city'").get();
+  if (!customer || !projects) return;
+  const sharedTaskTitles = seedTasks.slice(2).map(([title]) => title);
+  const moveTask = db.prepare(`UPDATE tasks SET customer_id=? WHERE customer_id=? AND title=?
+    AND NOT EXISTS (SELECT 1 FROM applications WHERE task_id=tasks.id)
+    AND NOT EXISTS (SELECT 1 FROM assignments WHERE task_id=tasks.id)`);
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    for (const title of sharedTaskTitles) moveTask.run(projects.id, customer.id, title);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+normalizeDemoTaskOwnership();

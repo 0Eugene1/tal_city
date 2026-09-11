@@ -258,6 +258,8 @@ input[type="checkbox"], input[type="radio"] { width: auto; accent-color: var(--b
 .action-box { padding: 22px; background: var(--accent-soft); border: 1px solid #e7d997; border-radius: 15px; }
 .action-box h3 { color: #5f501d; }
 .action-box p { color: #77682e; font-size: 13px; line-height: 1.45; }
+.demo-turn { margin-top: 12px; padding: 15px; background: var(--brand-soft); border: 1px solid #bdd8ca; border-radius: 12px; }
+.demo-turn p { margin: 0 0 10px; color: var(--brand-dark); font-size: 13px; line-height: 1.45; }
 
 .admin-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 13px; margin-bottom: 24px; }
 .metric { padding: 20px; background: white; border: 1px solid var(--line); border-radius: 14px; }

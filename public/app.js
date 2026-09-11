@@ -17,6 +17,14 @@ const MAX_PROJECT_PRICE = 100_000_000;
 const MIN_HOURLY_RATE = 100;
 const MAX_HOURLY_RATE = 100_000;
 
+function isCustomer(user = state.bootstrap?.user) {
+  return Boolean(user && !user.isAdmin && user.primaryRole === 'CUSTOMER');
+}
+
+function isExecutor(user = state.bootstrap?.user) {
+  return Boolean(user && !user.isAdmin && user.primaryRole === 'EXECUTOR');
+}
+
 function esc(value = '') {
   return String(value).replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 }
@@ -42,6 +50,17 @@ function dateWithOffset(days = 0) {
   const month = String(value.getMonth() + 1).padStart(2, '0');
   const day = String(value.getDate()).padStart(2, '0');
   return `${year}-${month}-${day}`;
+}
+
+function isoToInputDate(value = '') {
+  const match = String(value).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : '';
+}
+
+function inputDateToIso(value = '') {
+  const match = String(value).match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!match) return '';
+  return `${match[3]}-${match[2]}-${match[1]}`;
 }
 
 function initials(name = '') {
@@ -106,20 +125,21 @@ function renderHeader() {
   const user = state.bootstrap?.user;
   const current = location.pathname;
   const active = (path) => current === path || (path !== '/' && current.startsWith(path)) ? 'active' : '';
+  const accountHref = user?.isAdmin ? '/admin' : isExecutor(user) ? '/profile/me' : '/my-tasks';
   header.innerHTML = `
     <div class="header-inner">
       <a class="brand" href="/" data-link><span class="brand-mark">Т</span><span><b>Биржа талантов</b><small>Город находит тех, кто умеет</small></span></a>
       <button class="icon-btn mobile-menu-btn" data-action="toggle-nav" aria-controls="main-nav" aria-expanded="false" aria-label="Открыть меню">☰</button>
       <nav class="nav" id="main-nav" aria-label="Основная навигация">
         <a class="${active('/tasks')}" href="/tasks" data-link>Задачи</a>
-        ${user ? `<a class="${active('/my-tasks')}" href="/my-tasks" data-link>Мои задачи</a>` : ''}
-        ${user ? `<a class="${active('/applications')}" href="/applications" data-link>Отклики на мои задачи</a>` : ''}
+        ${user && !user.isAdmin ? `<a class="${active('/my-tasks')}" href="/my-tasks" data-link>${isCustomer(user) ? 'Мои задачи' : 'Моя работа'}</a>` : ''}
+        ${isCustomer(user) ? `<a class="${active('/applications')}" href="/applications" data-link>Отклики на мои задачи</a>` : ''}
         ${user?.isAdmin ? `<a class="${active('/admin')}" href="/admin" data-link>Модерация</a>` : ''}
       </nav>
       <div class="header-actions">
         ${user ? `
-          <a class="btn btn-primary hide-mobile" href="/tasks/create" data-link>Создать задачу</a>
-          <a class="user-chip" href="/profile/me" data-link title="Мой профиль"><span class="avatar">${esc(initials(user.name))}</span><span>${esc(user.name)}</span></a>
+          ${isCustomer(user) ? '<a class="btn btn-primary hide-mobile" href="/tasks/create" data-link>Создать задачу</a>' : ''}
+          <a class="user-chip" href="${accountHref}" data-link title="${isExecutor(user) ? 'Мой профиль' : 'Мой кабинет'}"><span class="avatar">${esc(initials(user.name))}</span><span>${esc(user.name)}</span></a>
           <button class="btn btn-ghost logout-btn" data-action="logout" aria-label="Выйти из аккаунта">Выйти</button>
         ` : `
           <a class="btn btn-ghost" href="/login" data-link>Войти</a>
@@ -150,6 +170,14 @@ function taskCard(task, extra = '') {
 function homePage() {
   setTitle('');
   const stats = state.bootstrap.stats;
+  const user = state.bootstrap.user;
+  const heroActions = user?.isAdmin
+    ? '<a class="btn btn-accent btn-lg" href="/admin" data-link>Открыть модерацию</a><a class="btn btn-secondary btn-lg" href="/tasks" data-link>Посмотреть задачи</a>'
+    : isCustomer(user)
+      ? '<a class="btn btn-accent btn-lg" href="/tasks/create" data-link>Создать задачу</a><a class="btn btn-secondary btn-lg" href="/my-tasks" data-link>Мои задачи</a>'
+      : isExecutor(user)
+        ? '<a class="btn btn-accent btn-lg" href="/tasks" data-link>Найти задачу</a><a class="btn btn-secondary btn-lg" href="/my-tasks" data-link>Моя работа</a>'
+        : '<a class="btn btn-accent btn-lg" href="/tasks/create" data-link>Мне нужна помощь</a><a class="btn btn-secondary btn-lg" href="/tasks" data-link>Хочу решать задачи</a>';
   app.innerHTML = `
     <section class="hero">
       <div class="hero-inner">
@@ -157,10 +185,7 @@ function homePage() {
           <p class="eyebrow">Биржа задач · Город талантов</p>
           <h1>Задачи города находят тех, кто <em>умеет</em></h1>
           <p class="lead">Опубликуйте реальную задачу и выберите исполнителя — или найдите проект, которому нужны именно ваши навыки.</p>
-          <div class="hero-actions">
-            <a class="btn btn-accent btn-lg" href="/tasks/create" data-link>Мне нужна помощь</a>
-            <a class="btn btn-secondary btn-lg" href="/tasks" data-link>Хочу решать задачи</a>
-          </div>
+          <div class="hero-actions">${heroActions}</div>
           <div class="hero-proof"><span>Понятные условия</span><span>Подбор по навыкам</span><span>Прозрачный статус</span></div>
         </div>
         <div class="hero-board" aria-label="Пример подбора исполнителей">
@@ -186,7 +211,7 @@ function homePage() {
       </div>
     </div></section>
     <section class="section" style="padding-top:0"><div class="section-inner"><div class="cta-band">
-      <h2>Есть задача, которую давно пора сдвинуть с места?</h2><a class="btn btn-accent btn-lg" href="/tasks/create" data-link>Опубликовать задачу</a>
+      <h2>${isExecutor(user) ? 'Готовы применить свои навыки в реальной задаче?' : 'Есть задача, которую давно пора сдвинуть с места?'}</h2><a class="btn btn-accent btn-lg" href="${isExecutor(user) ? '/tasks' : user?.isAdmin ? '/admin' : '/tasks/create'}" data-link>${isExecutor(user) ? 'Найти задачу' : user?.isAdmin ? 'Открыть модерацию' : 'Опубликовать задачу'}</a>
     </div></div></section>`;
 }
 
@@ -195,16 +220,16 @@ async function tasksPage() {
   const params = new URLSearchParams(location.search);
   const data = await api(`/api/tasks?${params}`);
   app.innerHTML = `<div class="page-shell">
-    <div class="page-title-row"><div><p class="eyebrow">Открытая биржа</p><h1>Задачи</h1><p class="lead">Выберите проект, в котором ваши навыки принесут видимый результат.</p></div><a class="btn btn-primary btn-lg" href="/tasks/create" data-link>Создать задачу</a></div>
+    <div class="page-title-row"><div><p class="eyebrow">Открытая биржа</p><h1>Задачи</h1><p class="lead">${isExecutor() ? 'Выберите проект, в котором ваши навыки принесут видимый результат.' : 'Открытые задачи городских проектов и команд.'}</p></div>${isCustomer() ? '<a class="btn btn-primary btn-lg" href="/tasks/create" data-link>Создать задачу</a>' : ''}</div>
     <div class="catalog-layout">
-      <form class="filters" id="filters-form">
+      <form class="filters" id="filters-form" novalidate>
         <div class="filter-title"><strong>Фильтры</strong><button class="btn btn-ghost btn-sm" type="button" data-action="clear-filters">Сбросить</button></div>
         <div class="field"><label for="q">Поиск</label><input id="q" name="q" maxlength="80" value="${esc(params.get('q') || '')}" placeholder="Название или навык" /></div>
         <div class="field"><label for="category">Категория</label><select id="category" name="category"><option value="">Все категории</option>${state.bootstrap.categories.map((item) => `<option ${params.get('category') === item ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></div>
         <div class="field"><label for="skill">Компетенция</label><input id="skill" name="skill" maxlength="50" value="${esc(params.get('skill') || '')}" placeholder="Например, Python" /></div>
         <div class="field"><label for="format">Формат</label><select id="format" name="format"><option value="">Любой</option>${state.bootstrap.formats.map((item) => `<option value="${item}" ${params.get('format') === item ? 'selected' : ''}>${formatLabels[item]}</option>`).join('')}</select></div>
         <div class="field"><label for="budgetMax">Бюджет до, ₽</label><input id="budgetMax" name="budgetMax" type="number" min="${MIN_PROJECT_PRICE}" max="${MAX_PROJECT_PRICE}" value="${esc(params.get('budgetMax') || '')}" placeholder="200 000" /></div>
-        <div class="field"><label for="deadline">Завершить до</label><input id="deadline" name="deadline" type="date" value="${esc(params.get('deadline') || '')}" /></div>
+        <div class="field"><label for="deadline">Завершить до</label><input id="deadline" name="deadline" type="text" inputmode="numeric" maxlength="10" pattern="[0-9]{2}/[0-9]{2}/[0-9]{4}" data-date-input data-min-date="${dateWithOffset(0)}" data-max-date="${dateWithOffset(730)}" value="${esc(isoToInputDate(params.get('deadline') || ''))}" placeholder="ДД/ММ/ГГГГ" /></div>
         <button class="btn btn-primary btn-block" type="submit">Показать задачи</button>
       </form>
       <div><p class="muted small">Найдено: ${data.tasks.length}</p><div class="task-list">${data.tasks.length ? data.tasks.map(taskCard).join('') : empty('Задач не найдено', 'Попробуйте убрать часть фильтров или изменить запрос.', '<button class="btn btn-secondary" data-action="clear-filters">Сбросить фильтры</button>')}</div></div>
@@ -216,9 +241,9 @@ function applicationModal(task) {
   state.modalReturnFocus = document.activeElement;
   modalRoot.innerHTML = `<div class="modal-backdrop" data-action="close-modal"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="apply-title">
     <div class="modal-head"><div><p class="eyebrow">Отклик на задачу</p><h2 id="apply-title">Предложите решение</h2><p class="muted small">${esc(task.title)}</p></div><button class="icon-btn" data-action="close-modal" aria-label="Закрыть">×</button></div>
-    <form id="application-form" data-task-id="${task.id}">
+    <form id="application-form" data-task-id="${task.id}" novalidate>
       <div class="field"><label for="message">Как вы решите задачу?</label><textarea id="message" name="message" minlength="20" maxlength="1500" required placeholder="Коротко опишите подход, релевантный опыт и первый шаг"></textarea></div>
-      <div class="field-row"><div class="field"><label for="proposedPrice">Стоимость, ₽</label><input id="proposedPrice" name="proposedPrice" type="number" min="${MIN_PROJECT_PRICE}" max="${MAX_PROJECT_PRICE}" step="1000" value="${task.budget}" required /><small>От 1 000 до 100 млн ₽</small></div><div class="field"><label for="proposedDeadline">Срок результата</label><input id="proposedDeadline" name="proposedDeadline" type="date" min="${dateWithOffset(0)}" max="${esc(task.deadline)}" value="${esc(task.deadline)}" required /><small>Не позже срока задачи — ${date(task.deadline)}</small></div></div>
+      <div class="field-row"><div class="field"><label for="proposedPrice">Стоимость, ₽</label><input id="proposedPrice" name="proposedPrice" type="number" min="${MIN_PROJECT_PRICE}" max="${MAX_PROJECT_PRICE}" step="1" value="${task.budget}" required /><small>Любая целая сумма от 1 000 до 100 млн ₽</small></div><div class="field"><label for="proposedDeadline">Срок результата</label><input id="proposedDeadline" name="proposedDeadline" type="text" inputmode="numeric" maxlength="10" pattern="[0-9]{2}/[0-9]{2}/[0-9]{4}" data-date-input data-min-date="${dateWithOffset(0)}" data-max-date="${esc(task.deadline)}" value="${esc(isoToInputDate(task.deadline))}" required placeholder="ДД/ММ/ГГГГ" /><small>Формат ДД/ММ/ГГГГ, не позже ${date(task.deadline)}</small></div></div>
       <div class="form-actions"><button class="btn btn-secondary" type="button" data-action="close-modal">Отмена</button><button class="btn btn-primary" type="submit">Отправить отклик</button></div>
     </form>
   </div></div>`;
@@ -230,7 +255,7 @@ function candidateCard(application, canSelect = true) {
   return `<article class="candidate-card">
     <a href="/profile/${person.id}" data-link><span class="avatar">${esc(initials(person.name))}</span></a>
     <div class="candidate-body"><a href="/profile/${person.id}" data-link><strong>${esc(person.name)}</strong></a><p>${esc(application.message)}</p>${tags(person.skills.slice(0, 5))}${matchDetails(application.match)}</div>
-    <div class="candidate-side"><span class="match-pill">${application.match.score}% по компетенциям</span><strong class="price" style="font-size:17px;margin-top:10px">${money(application.proposedPrice)}</strong><small class="muted">до ${date(application.proposedDeadline)}</small>${canSelect && application.status === 'SUBMITTED' ? `<button class="btn btn-primary btn-sm" data-action="select-executor" data-id="${application.id}">Выбрать</button>` : `<div style="margin-top:10px">${statusBadge(application.status)}</div>`}</div>
+    <div class="candidate-side"><span class="match-pill">${application.match.score}% по компетенциям</span><strong class="price" style="font-size:17px;margin-top:10px">${money(application.proposedPrice)}</strong><small class="muted">до ${date(application.proposedDeadline)}</small>${canSelect && application.status === 'SUBMITTED' ? `<button class="btn btn-primary btn-sm" data-action="select-executor" data-id="${application.id}">Выбрать исполнителя</button>` : `<div style="margin-top:10px">${statusBadge(application.status)}</div>`}</div>
   </article>`;
 }
 
@@ -239,9 +264,9 @@ async function taskDetailPage(id) {
   const { task } = data;
   setTitle(task.title);
   const user = state.bootstrap.user;
-  const isOwner = user && (user.id === task.customerId || user.isAdmin);
+  const isOwner = isCustomer(user) && user.id === task.customerId;
   const showRecommendations = isOwner && ['DRAFT', 'PUBLISHED', 'REVIEWING'].includes(task.status);
-  const workAvailable = ['ASSIGNED', 'IN_PROGRESS', 'SUBMITTED', 'ACCEPTED', 'CLOSED'].includes(task.status) && user && (isOwner || user.id === task.assignedExecutorId);
+  const workAvailable = ['ASSIGNED', 'IN_PROGRESS', 'SUBMITTED', 'ACCEPTED', 'CLOSED'].includes(task.status) && user && (isOwner || user.isAdmin || user.id === task.assignedExecutorId);
   let action = '';
   if (workAvailable) action = `<a class="btn btn-primary btn-block" href="/tasks/${task.id}/work" data-link>Открыть рабочую страницу</a>`;
   else if (data.myApplication) {
@@ -258,6 +283,7 @@ async function taskDetailPage(id) {
   else if (!isOwner && ['PUBLISHED', 'REVIEWING'].includes(task.status)) {
     if (task.expired) action = '<div class="result-box small">Срок задачи истёк — новые отклики больше не принимаются.</div>';
     else if (!user) action = `<a class="btn btn-primary btn-block" href="/login?next=/tasks/${task.id}" data-link>Войти и откликнуться</a>`;
+    else if (!isExecutor(user)) action = '<div class="result-box small">Откликаться на задачи может только исполнитель.</div>';
     else if (!user.profileCompleted) action = `<a class="btn btn-primary btn-block" href="/profile/me" data-link>Заполнить профиль для отклика</a>`;
     else action = `<button class="btn btn-primary btn-block" data-action="open-application" data-task='${esc(JSON.stringify(task))}'>Откликнуться</button>`;
   }
@@ -280,6 +306,7 @@ async function taskDetailPage(id) {
 
 function taskFormPage(task = null) {
   if (!state.bootstrap.user) return authGate('Чтобы создать задачу, войдите как заказчик.');
+  if (!isCustomer()) return accessDenied('Создавать и публиковать задачи может только заказчик.');
   const editing = Boolean(task);
   const draft = task?.status === 'DRAFT';
   setTitle(editing ? 'Редактирование задачи' : 'Новая задача');
@@ -296,7 +323,7 @@ function taskFormPage(task = null) {
         <div class="field-row"><div class="field"><label for="category">Категория</label><select id="category" name="category" required><option value="">Выберите</option>${state.bootstrap.categories.map((item) => `<option ${task?.category === item ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></div><div class="field"><label for="skills">Компетенции</label><input id="skills" name="skills" maxlength="600" required value="${esc(task?.skills?.join(', ') || '')}" placeholder="ESP32, IoT, Sensors" /><small>От 1 до 12 навыков через запятую</small></div></div>
       </section>
       <section class="form-section"><div class="form-section-head"><h3>Условия</h3><p>Эти данные помогут получить предметные отклики.</p></div>
-        <div class="field-row"><div class="field"><label for="budget">Бюджет, ₽</label><input id="budget" name="budget" type="number" min="${MIN_PROJECT_PRICE}" max="${MAX_PROJECT_PRICE}" step="1000" required value="${task?.budget ?? ''}" placeholder="120000" /><small>От 1 000 до 100 млн ₽</small></div><div class="field"><label for="deadline">Срок результата</label><input id="deadline" name="deadline" type="date" min="${minDate}" max="${maxDate}" value="${esc(task?.deadline || '')}" required /><small>Допустимый срок: с ${date(minDate)} по ${date(maxDate)}</small></div></div>
+        <div class="field-row"><div class="field"><label for="budget">Бюджет, ₽</label><input id="budget" name="budget" type="number" min="${MIN_PROJECT_PRICE}" max="${MAX_PROJECT_PRICE}" step="1" required value="${task?.budget ?? ''}" placeholder="125500" /><small>Любая целая сумма от 1 000 до 100 млн ₽</small></div><div class="field"><label for="deadline">Срок результата</label><input id="deadline" name="deadline" type="text" inputmode="numeric" maxlength="10" pattern="[0-9]{2}/[0-9]{2}/[0-9]{4}" data-date-input data-min-date="${minDate}" data-max-date="${maxDate}" value="${esc(isoToInputDate(task?.deadline || ''))}" required placeholder="ДД/ММ/ГГГГ" /><small>Формат ДД/ММ/ГГГГ. Допустимо с ${date(minDate)} по ${date(maxDate)}</small></div></div>
         <div class="field-row"><div class="field"><label for="location">Локация</label><input id="location" name="location" maxlength="100" required value="${esc(task?.location || 'Новосибирск')}" /></div><div class="field"><label for="format">Формат</label><select id="format" name="format" required>${state.bootstrap.formats.map((item) => `<option value="${item}" ${task?.format === item ? 'selected' : ''}>${formatLabels[item]}</option>`).join('')}</select></div></div>
         ${!editing || draft ? `<label class="checkbox"><input type="checkbox" name="publish" ${editing ? '' : 'checked'} /><span><strong>${editing ? 'Опубликовать после сохранения' : 'Сразу опубликовать'}</strong><br>${editing ? 'После проверки задача появится в каталоге.' : 'Снимите отметку, чтобы сохранить черновик.'}</span></label>` : ''}
       </section>
@@ -311,6 +338,7 @@ function taskCreatePage() {
 
 async function taskEditPage(id) {
   if (!state.bootstrap.user) return authGate('Чтобы редактировать задачу, войдите в аккаунт.');
+  if (!isCustomer()) return accessDenied('Редактировать задачу может только заказчик.');
   const { task } = await api(`/api/tasks/${id}`);
   const user = state.bootstrap.user;
   if (user.id !== task.customerId && !user.isAdmin) return accessDenied('Редактировать задачу может только её заказчик.');
@@ -351,6 +379,7 @@ function authPage(mode) {
 async function profilePage(id) {
   const me = id === 'me';
   if (me && !state.bootstrap.user) return authGate('Профиль исполнителя доступен после входа.');
+  if (me && !isExecutor()) return accessDenied('Личный профиль компетенций доступен только исполнителю.');
   const data = await api(me ? '/api/profile/me' : `/api/profile/${id}`);
   const profile = data.profile;
   setTitle(me ? 'Мой профиль' : profile.name);
@@ -379,6 +408,7 @@ async function profilePage(id) {
 
 async function applicationsPage() {
   if (!state.bootstrap.user) return authGate('Отклики заказчика доступны после входа.');
+  if (!isCustomer()) return accessDenied('Сравнивать отклики и выбирать исполнителя может только заказчик.');
   setTitle('Отклики');
   const data = await api('/api/applications');
   app.innerHTML = `<div class="page-shell medium">${backControl('Мои задачи', '/my-tasks')}<div class="page-title-row"><div><p class="eyebrow">Кабинет заказчика</p><h1>Отклики</h1><p class="lead">Сравните подход, условия и совпадение компетенций.</p></div></div>
@@ -392,13 +422,21 @@ function taskSection(title, copy, items, emptyCopy, emptyAction) {
 
 async function myTasksPage() {
   if (!state.bootstrap.user) return authGate('Личный список задач доступен после входа.');
-  setTitle('Мои задачи');
+  if (state.bootstrap.user.isAdmin) return accessDenied('Для модератора доступна операционная панель.');
   const data = await api('/api/my-tasks');
+  if (isCustomer()) {
+    setTitle('Мои задачи');
+    const demoNote = state.bootstrap.user.email === 'customer@demo.city'
+      ? '<div class="result-box small" style="margin-bottom:18px">Две задачи подготовлены для демонстрации. Остальные записи здесь — только задачи, созданные этим аккаунтом.</div>'
+      : '';
+    app.innerHTML = `<div class="page-shell"><div class="page-title-row"><div><p class="eyebrow">Кабинет заказчика</p><h1>Мои задачи</h1><p class="lead">Только задачи, созданные вами. Здесь можно публиковать их и выбирать исполнителей.</p></div><a class="btn btn-primary btn-lg" href="/tasks/create" data-link>Создать задачу</a></div>${demoNote}${taskSection('Созданные вами', 'Управляйте публикацией и выбирайте исполнителей.', data.created, 'Создайте первую задачу и опубликуйте её в каталоге.', '<a class="btn btn-primary" href="/tasks/create" data-link>Создать задачу</a>')}</div>`;
+    return;
+  }
+  setTitle('Моя работа');
   const requestedTab = new URLSearchParams(location.search).get('tab');
-  const activeTab = ['created', 'assigned', 'applied'].includes(requestedTab) ? requestedTab : 'created';
-  app.innerHTML = `<div class="page-shell"><div class="page-title-row"><div><p class="eyebrow">Личный кабинет</p><h1>Мои задачи</h1><p class="lead">Всё, что вы создали, откликнулись или взяли в работу.</p></div><a class="btn btn-primary btn-lg" href="/tasks/create" data-link>Создать задачу</a></div>
-    <div class="tabs" role="tablist" aria-label="Разделы задач"><button class="tab ${activeTab === 'created' ? 'active' : ''}" role="tab" aria-selected="${activeTab === 'created'}" aria-controls="task-tab-created" data-action="task-tab" data-tab="created">Созданы · ${data.created.length}</button><button class="tab ${activeTab === 'assigned' ? 'active' : ''}" role="tab" aria-selected="${activeTab === 'assigned'}" aria-controls="task-tab-assigned" data-action="task-tab" data-tab="assigned">В работе · ${data.assigned.length}</button><button class="tab ${activeTab === 'applied' ? 'active' : ''}" role="tab" aria-selected="${activeTab === 'applied'}" aria-controls="task-tab-applied" data-action="task-tab" data-tab="applied">Отклики · ${data.applied.length}</button></div>
-    <div id="task-tab-created" role="tabpanel" ${activeTab === 'created' ? '' : 'hidden'}>${taskSection('Созданные вами', 'Управляйте публикацией и выбирайте исполнителей.', data.created, 'Создайте первую задачу и опубликуйте её в каталоге.', '<a class="btn btn-primary" href="/tasks/create" data-link>Создать задачу</a>')}</div>
+  const activeTab = ['assigned', 'applied'].includes(requestedTab) ? requestedTab : 'assigned';
+  app.innerHTML = `<div class="page-shell"><div class="page-title-row"><div><p class="eyebrow">Кабинет исполнителя</p><h1>Моя работа</h1><p class="lead">Назначенные вам задачи и отправленные вами отклики.</p></div><a class="btn btn-primary btn-lg" href="/tasks" data-link>Найти задачу</a></div>
+    <div class="tabs" role="tablist" aria-label="Разделы работы"><button class="tab ${activeTab === 'assigned' ? 'active' : ''}" role="tab" aria-selected="${activeTab === 'assigned'}" aria-controls="task-tab-assigned" data-action="task-tab" data-tab="assigned">В работе · ${data.assigned.length}</button><button class="tab ${activeTab === 'applied' ? 'active' : ''}" role="tab" aria-selected="${activeTab === 'applied'}" aria-controls="task-tab-applied" data-action="task-tab" data-tab="applied">Мои отклики · ${data.applied.length}</button></div>
     <div id="task-tab-assigned" role="tabpanel" ${activeTab === 'assigned' ? '' : 'hidden'}>${taskSection('Назначенные вам', 'Задачи, где заказчик выбрал вас исполнителем.', data.assigned, 'Назначение появится после того, как заказчик выберет ваш отклик.', '<a class="btn btn-secondary" href="/tasks" data-link>Найти задачу</a>')}</div>
     <div id="task-tab-applied" role="tabpanel" ${activeTab === 'applied' ? '' : 'hidden'}>${taskSection('Ваши отклики', 'Следите за решением заказчика.', data.applied, 'Найдите подходящую задачу и отправьте предложение.', '<a class="btn btn-primary" href="/tasks" data-link>Перейти в каталог</a>')}</div>
   </div>`;
@@ -415,19 +453,23 @@ function reviewForm(taskId) {
 
 async function workPage(id) {
   const data = await api(`/api/tasks/${id}/work`);
-  const { task, assignment, history, reviews, viewerId } = data;
+  const { task, assignment, history, reviews, viewerId, demoSwitch } = data;
   setTitle(`Работа: ${task.title}`);
   const isExecutor = viewerId === assignment.executorId;
   const isCustomer = viewerId === assignment.customerId;
   const reviewed = reviews.some((item) => Number(item.author_id) === viewerId);
   const waitingMessages = {
-    ASSIGNED: isCustomer ? 'Исполнитель выбран. Теперь ожидаем, когда он подтвердит начало работы.' : 'Назначение создано. Исполнитель может начать работу.',
+    ASSIGNED: isCustomer ? `Вы уже выбрали исполнителя — ${assignment.executorName}. Сейчас его ход: подтвердить начало работы.` : 'Назначение создано. Нажмите «Начать работу», чтобы заказчик увидел старт.',
     IN_PROGRESS: isCustomer ? 'Исполнитель работает над задачей. Следующее действие появится после отправки результата.' : 'Работа начата — отправьте результат, когда он будет готов.',
     SUBMITTED: isExecutor ? 'Результат передан заказчику. Ожидайте принятия или комментария на доработку.' : 'Результат ожидает проверки заказчиком.',
     ACCEPTED: isExecutor ? 'Заказчик принял результат. Он закроет задачу после завершения договорённостей.' : 'Результат принят — задачу можно закрыть.',
     CLOSED: 'Задача завершена. Если вы ещё не оставили отзыв, это можно сделать ниже.',
   };
   let action = `<div class="result-box small">${esc(waitingMessages[assignment.status] || 'Сейчас действие ожидается от другой стороны.')}</div>`;
+  const nextRole = { ASSIGNED: 'EXECUTOR', IN_PROGRESS: 'EXECUTOR', SUBMITTED: 'CUSTOMER', ACCEPTED: 'CUSTOMER' }[assignment.status];
+  if (demoSwitch && demoSwitch.role === nextRole) {
+    action += `<div class="demo-turn"><p><strong>Демонстрационный режим:</strong> продолжите сценарий от лица участника, чей сейчас ход.</p><button class="btn btn-secondary" data-action="demo-login" data-email="${esc(demoSwitch.email)}" data-next="/tasks/${task.id}/work">Продолжить как ${esc(demoSwitch.name)}</button></div>`;
+  }
   if (assignment.status === 'ASSIGNED' && isExecutor) action = `<div class="action-box"><h3>Можно начинать</h3><p>Подтвердите старт — заказчик увидит, что задача взята в работу.</p><button class="btn btn-primary" data-action="work-action" data-work-action="start" data-id="${task.id}">Начать работу</button></div>`;
   if (assignment.status === 'IN_PROGRESS' && isExecutor) action = `<div class="action-box"><h3>Отправить результат</h3>${assignment.revisionNote ? `<p><strong>Комментарий заказчика:</strong> ${esc(assignment.revisionNote)}</p>` : '<p>Опишите, что сделано, и приложите ссылку при необходимости.</p>'}<form id="result-form" data-task-id="${task.id}"><div class="field"><label for="resultNote">Описание результата</label><textarea id="resultNote" name="resultNote" minlength="20" maxlength="3000" required></textarea></div><div class="field"><label for="resultUrl">Ссылка</label><input id="resultUrl" name="resultUrl" type="url" maxlength="500" placeholder="https://…" /><small>Необязательно. Полная ссылка с https://</small></div><button class="btn btn-primary" type="submit">Передать заказчику</button></form></div>`;
   if (assignment.status === 'SUBMITTED' && isCustomer) action = `<div class="action-box"><h3>Результат готов к проверке</h3><p>Примите работу или верните с конкретным комментарием.</p><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn btn-primary" data-action="work-action" data-work-action="accept" data-id="${task.id}">Принять результат</button><button class="btn btn-secondary" data-action="open-revision" data-id="${task.id}">Вернуть на доработку</button></div></div>`;
@@ -559,17 +601,28 @@ function showFieldError(field, message) {
 function updateDateValidity(input) {
   input.setCustomValidity('');
   let message = '';
-  if (input.validity.badInput) message = 'Укажите существующую дату в формате день, месяц и год.';
-  else if (input.value && !/^\d{4}-\d{2}-\d{2}$/.test(input.value)) message = 'Укажите существующую дату полностью.';
-  else if (input.validity.rangeUnderflow) message = `Дата не может быть раньше ${date(input.min)}.`;
-  else if (input.validity.rangeOverflow) message = `Дата не может быть позже ${date(input.max)}.`;
+  const iso = inputDateToIso(input.value);
+  if (input.value && !iso) message = 'Введите дату полностью в формате ДД/ММ/ГГГГ.';
+  if (iso) {
+    const [year, month, day] = iso.split('-').map(Number);
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    const exists = parsed.getUTCFullYear() === year && parsed.getUTCMonth() === month - 1 && parsed.getUTCDate() === day;
+    if (!exists) message = 'Такой календарной даты не существует.';
+    else if (input.dataset.minDate && iso < input.dataset.minDate) message = `Дата не может быть раньше ${isoToInputDate(input.dataset.minDate)}.`;
+    else if (input.dataset.maxDate && iso > input.dataset.maxDate) message = `Дата не может быть позже ${isoToInputDate(input.dataset.maxDate)}.`;
+  }
   input.setCustomValidity(message);
   return message;
 }
 
+function maskDateInput(value) {
+  const digits = String(value).replace(/\D/g, '').slice(0, 8);
+  return [digits.slice(0, 2), digits.slice(2, 4), digits.slice(4, 8)].filter(Boolean).join('/');
+}
+
 function fieldValidationMessage(field) {
   const label = field.labels?.[0]?.textContent?.trim() || 'Поле';
-  if (field.type === 'date') {
+  if (field.matches('[data-date-input]')) {
     const dateMessage = updateDateValidity(field);
     if (dateMessage) return `${label}: ${dateMessage}`;
   }
@@ -587,7 +640,7 @@ function fieldValidationMessage(field) {
 function validateForm(form) {
   form.querySelectorAll('[aria-invalid="true"]').forEach((field) => field.removeAttribute('aria-invalid'));
   form.querySelectorAll('.field-error').forEach((error) => error.remove());
-  form.querySelectorAll('input[type="date"]').forEach(updateDateValidity);
+  form.querySelectorAll('[data-date-input]').forEach(updateDateValidity);
   const invalid = [...form.elements].find((field) => field.willValidate && !field.validity.valid);
   if (!invalid) return true;
   invalid.setAttribute('aria-invalid', 'true');
@@ -621,7 +674,7 @@ document.addEventListener('click', async (event) => {
       actionBusy(actionEl);
       await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: actionEl.dataset.email, password: 'demo1234' }) });
       await refreshBootstrap();
-      const next = new URLSearchParams(location.search).get('next');
+      const next = actionEl.dataset.next || new URLSearchParams(location.search).get('next');
       const safeNext = next?.startsWith('/') && !next.startsWith('//') ? next : null;
       const demoTarget = safeNext || (state.bootstrap.user.isAdmin ? '/admin' : state.bootstrap.user.primaryRole === 'EXECUTOR' ? '/tasks' : '/my-tasks');
       navigate(demoTarget); toast('Демо-режим включён');
@@ -665,17 +718,18 @@ document.addEventListener('submit', async (event) => {
   busy(form, true);
   try {
     if (form.id === 'filters-form') {
+      data.deadline = inputDateToIso(data.deadline);
       const params = new URLSearchParams(Object.entries(data).filter(([, value]) => value)); navigate(`/tasks${params.size ? `?${params}` : ''}`);
     } else if (form.id === 'login-form') {
       await api('/api/auth/login', { method: 'POST', body: JSON.stringify(data) }); await refreshBootstrap();
       const next = new URLSearchParams(location.search).get('next');
-      const defaultTarget = state.bootstrap.user.primaryRole === 'EXECUTOR' ? '/tasks' : '/my-tasks';
+      const defaultTarget = state.bootstrap.user.isAdmin ? '/admin' : state.bootstrap.user.primaryRole === 'EXECUTOR' ? '/tasks' : '/my-tasks';
       navigate(next?.startsWith('/') && !next.startsWith('//') ? next : defaultTarget); toast('Вы вошли');
     } else if (form.id === 'register-form') {
       await api('/api/auth/register', { method: 'POST', body: JSON.stringify(data) }); await refreshBootstrap();
       navigate(data.role === 'EXECUTOR' ? '/profile/me' : '/tasks/create'); toast('Аккаунт создан');
     } else if (form.id === 'task-form') {
-      const payload = { ...data, skills: data.skills.split(',').map((item) => item.trim()).filter(Boolean), publish: new FormData(form).has('publish') };
+      const payload = { ...data, deadline: inputDateToIso(data.deadline), skills: data.skills.split(',').map((item) => item.trim()).filter(Boolean), publish: new FormData(form).has('publish') };
       if (form.dataset.taskId) {
         const taskId = form.dataset.taskId;
         await api(`/api/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify(payload) });
@@ -688,6 +742,7 @@ document.addEventListener('submit', async (event) => {
       const payload = { ...data, skills: data.skills.split(',').map((item) => item.trim()).filter(Boolean) };
       await api('/api/profile/me', { method: 'PUT', body: JSON.stringify(payload) }); await refreshBootstrap(); toast('Профиль сохранён'); navigate('/tasks');
     } else if (form.id === 'application-form') {
+      data.proposedDeadline = inputDateToIso(data.proposedDeadline);
       await api(`/api/tasks/${form.dataset.taskId}/applications`, { method: 'POST', body: JSON.stringify(data) }); modalRoot.innerHTML = ''; toast('Отклик отправлен. Заказчик увидит его среди кандидатов'); navigate('/my-tasks?tab=applied');
     } else if (form.id === 'result-form') {
       await api(`/api/tasks/${form.dataset.taskId}/work/submit`, { method: 'POST', body: JSON.stringify(data) }); toast('Результат отправлен заказчику'); render();
@@ -704,7 +759,14 @@ document.addEventListener('input', (event) => {
   if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement || field instanceof HTMLSelectElement)) return;
   field.removeAttribute('aria-invalid');
   field.closest('.field')?.querySelector('.field-error')?.remove();
-  if (field instanceof HTMLInputElement && field.type === 'date') updateDateValidity(field);
+  if (field instanceof HTMLInputElement && field.matches('[data-date-input]')) {
+    field.value = maskDateInput(field.value);
+    const message = updateDateValidity(field);
+    if (field.value.length === 10 && message) {
+      field.setAttribute('aria-invalid', 'true');
+      showFieldError(field, fieldValidationMessage(field));
+    }
+  }
 });
 
 window.addEventListener('popstate', render);

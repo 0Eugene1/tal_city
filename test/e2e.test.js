@@ -75,10 +75,13 @@ test('демо-данные показывают подбор, доверие, �
   await customer.request('/api/auth/login', { method: 'POST', body: {
     email: 'customer@demo.city', password: 'demo1234',
   }});
-  const emptyExecutorProfile = await customer.request('/api/profile/me');
+  const emptyExecutorProfile = await client().request('/api/profile/2');
   assert.equal(emptyExecutorProfile.profile.id, 2);
   assert.deepEqual(emptyExecutorProfile.profile.skills, []);
   const myTasks = await customer.request('/api/my-tasks');
+  assert.equal(myTasks.created.length, 2);
+  assert.deepEqual(myTasks.assigned, []);
+  assert.deepEqual(myTasks.applied, []);
   const smartTask = myTasks.created.find((task) => task.title === 'Автономная система контроля заполненности урн');
   assert.ok(smartTask);
   assert.equal(smartTask.status, 'REVIEWING');
@@ -86,7 +89,7 @@ test('демо-данные показывают подбор, доверие, �
   const smartDetail = await customer.request(`/api/tasks/${smartTask.id}`);
   assert.deepEqual(smartDetail.applications.map((item) => item.match.score), [100, 75, 25]);
   assert.deepEqual(smartDetail.applications[0].match.missingSkills, []);
-  assert.ok(smartDetail.task.customer.publishedTasks >= 10);
+  assert.ok(smartDetail.task.customer.publishedTasks >= 2);
   assert.equal(smartDetail.task.customer.completedTasks, 1);
 
   const closedTask = myTasks.created.find((task) => task.status === 'CLOSED');
@@ -243,6 +246,11 @@ test('даты, суммы, права и статусные переходы з
   };
   await assert.rejects(executor.request('/api/profile/me', { method: 'PUT', body: { ...profile, desiredRate: 0 } }), /Ставка/);
   await executor.request('/api/profile/me', { method: 'PUT', body: profile });
+  await assert.rejects(executor.request('/api/tasks', { method: 'POST', body: baseTask }), /только заказчику/);
+  await assert.rejects(customer.request('/api/profile/me'), /только исполнителю/);
+  await assert.rejects(customer.request(`/api/tasks/${created.taskId}/applications`, { method: 'POST', body: {
+    message: 'Заказчик не должен иметь возможность откликаться на задачи как исполнитель.', proposedPrice: 48000, proposedDeadline: futureDate(20),
+  }}), /только исполнителю/);
 
   const offer = { message: 'Проверю ограничения, автоматизирую сценарий и приложу понятный отчёт.', proposedPrice: 48000, proposedDeadline: futureDate(20) };
   await assert.rejects(executor.request(`/api/tasks/${created.taskId}/applications`, { method: 'POST', body: { ...offer, proposedPrice: 0 } }), /Стоимость/);
@@ -278,6 +286,7 @@ test('даты, суммы, права и статусные переходы з
 
   const admin = client();
   await admin.request('/api/auth/login', { method: 'POST', body: { email: 'admin@talent.city', password: 'demo1234' } });
+  await assert.rejects(admin.request('/api/tasks', { method: 'POST', body: baseTask }), /только заказчику/);
   await assert.rejects(admin.request(`/api/admin/tasks/${created.taskId}`, { method: 'PATCH', body: { status: 'ACCEPTED' } }), /не может менять рабочий статус/);
   const moderated = await customer.request('/api/tasks', { method: 'POST', body: {
     ...baseTask, title: 'Черновик для проверки модерации', publish: false,
@@ -304,6 +313,8 @@ test('критичные клиентские маршруты и страниц
   const clientScript = await clientScriptResponse.text();
   assert.match(clientScript, /id="task-form" novalidate/);
   assert.match(clientScript, /Дата не может быть позже/);
+  assert.match(clientScript, /ДД\/ММ\/ГГГГ/);
+  assert.match(clientScript, /step="1"/);
   assert.match(clientScript, /safeNext/);
   await assert.rejects(client().request('/api/tasks/999999999'), /Задача не найдена/);
 });

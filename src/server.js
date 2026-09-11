@@ -223,6 +223,18 @@ function requireAdmin(req) {
   return user;
 }
 
+function requireCustomer(req) {
+  const user = requireUser(req);
+  if (user.isAdmin || user.primaryRole !== 'CUSTOMER') throw new ApiError(403, 'Действие доступно только заказчику');
+  return user;
+}
+
+function requireExecutor(req) {
+  const user = requireUser(req);
+  if (user.isAdmin || user.primaryRole !== 'EXECUTOR') throw new ApiError(403, 'Действие доступно только исполнителю');
+  return user;
+}
+
 function setSession(res, userId, req) {
   const token = createSessionToken();
   db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at, created_at) VALUES (?, ?, ?, ?)')
@@ -313,7 +325,8 @@ function validateTask(body) {
 }
 
 function assignmentForTask(taskId) {
-  return db.prepare(`SELECT a.*, c.name AS customer_name, e.name AS executor_name,
+  return db.prepare(`SELECT a.*, c.name AS customer_name, c.email AS customer_email,
+      e.name AS executor_name, e.email AS executor_email,
       ap.proposed_price, ap.proposed_deadline
     FROM assignments a
     JOIN users c ON c.id = a.customer_id
@@ -403,13 +416,13 @@ async function api(req, res, url) {
   }
 
   if (method === 'GET' && path === '/api/profile/me') {
-    const user = requireUser(req);
+    const user = requireExecutor(req);
     const row = db.prepare(`SELECT u.id, u.name, p.* FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = ?`).get(user.id);
     return json(res, 200, { profile: parseProfile(row) });
   }
 
   if (method === 'PUT' && path === '/api/profile/me') {
-    const user = requireUser(req);
+    const user = requireExecutor(req);
     const body = await readJson(req);
     const profile = {
       bio: text(body.bio, { required: true, min: 20, max: 1000, label: 'О себе' }),
@@ -490,7 +503,7 @@ async function api(req, res, url) {
   }
 
   if (method === 'POST' && path === '/api/tasks') {
-    const user = requireUser(req);
+    const user = requireCustomer(req);
     const body = await readJson(req);
     const task = validateTask(body);
     const status = body.publish ? 'PUBLISHED' : 'DRAFT';
@@ -540,10 +553,10 @@ async function api(req, res, url) {
 
   if (method === 'PUT' && match) {
     const taskId = Number(match[1]);
-    const user = requireUser(req);
+    const user = requireCustomer(req);
     const row = getTask(taskId);
     if (!row) throw new ApiError(404, 'Задача не найдена');
-    if (!user.isAdmin && user.id !== Number(row.customer_id)) throw new ApiError(403, 'Редактировать может только заказчик');
+    if (user.id !== Number(row.customer_id)) throw new ApiError(403, 'Редактировать может только заказчик задачи');
     if (!['DRAFT', 'PUBLISHED', 'REVIEWING'].includes(row.status)) throw new ApiError(409, 'Назначенную задачу уже нельзя редактировать');
     const task = validateTask(await readJson(req));
     const latestOffer = db.prepare(`SELECT MAX(proposed_deadline) AS deadline FROM applications
@@ -560,10 +573,10 @@ async function api(req, res, url) {
   match = path.match(/^\/api\/tasks\/(\d+)\/publish$/);
   if (method === 'POST' && match) {
     const taskId = Number(match[1]);
-    const user = requireUser(req);
+    const user = requireCustomer(req);
     const row = getTask(taskId);
     if (!row) throw new ApiError(404, 'Задача не найдена');
-    if (!user.isAdmin && user.id !== Number(row.customer_id)) throw new ApiError(403, 'Публиковать может только заказчик');
+    if (user.id !== Number(row.customer_id)) throw new ApiError(403, 'Публиковать может только заказчик задачи');
     if (row.status !== 'DRAFT') throw new ApiError(409, 'Задача уже опубликована');
     const timestamp = now();
     db.prepare(`UPDATE tasks SET status='PUBLISHED', published_at=?, updated_at=? WHERE id=?`).run(timestamp, timestamp, taskId);
@@ -575,7 +588,7 @@ async function api(req, res, url) {
   match = path.match(/^\/api\/tasks\/(\d+)\/applications$/);
   if (method === 'POST' && match) {
     const taskId = Number(match[1]);
-    const user = requireUser(req);
+    const user = requireExecutor(req);
     const task = getTask(taskId);
     ensureTaskVisible(task, user);
     if (!user.profileCompleted) throw new ApiError(409, 'Сначала заполните профиль исполнителя');
@@ -605,7 +618,7 @@ async function api(req, res, url) {
   }
 
   if (method === 'GET' && path === '/api/applications') {
-    const user = requireUser(req);
+    const user = requireCustomer(req);
     const rows = db.prepare(`SELECT a.*, t.title AS task_title, t.skills AS task_skills,
       u.name AS executor_name, p.bio, p.skills AS profile_skills, p.experience,
       p.location AS profile_location, p.work_format, p.desired_rate
@@ -617,11 +630,11 @@ async function api(req, res, url) {
 
   match = path.match(/^\/api\/applications\/(\d+)\/select$/);
   if (method === 'POST' && match) {
-    const user = requireUser(req);
+    const user = requireCustomer(req);
     const applicationId = Number(match[1]);
     const app = db.prepare(`SELECT a.*, t.customer_id, t.status AS task_status FROM applications a JOIN tasks t ON t.id=a.task_id WHERE a.id=?`).get(applicationId);
     if (!app) throw new ApiError(404, 'Отклик не найден');
-    if (!user.isAdmin && user.id !== Number(app.customer_id)) throw new ApiError(403, 'Исполнителя выбирает заказчик');
+    if (user.id !== Number(app.customer_id)) throw new ApiError(403, 'Исполнителя выбирает заказчик задачи');
     if (!PUBLIC_TASK_STATUSES.includes(app.task_status)) throw new ApiError(409, 'Для задачи уже выбран исполнитель');
     const timestamp = now();
     db.exec('BEGIN IMMEDIATE');
@@ -644,6 +657,7 @@ async function api(req, res, url) {
 
   if (method === 'GET' && path === '/api/my-tasks') {
     const user = requireUser(req);
+    if (user.isAdmin) throw new ApiError(403, 'Для модератора доступна операционная панель');
     const created = db.prepare(`SELECT t.*, u.name AS customer_name,
       (SELECT COUNT(*) FROM applications a WHERE a.task_id=t.id AND a.status!='WITHDRAWN') AS application_count
       FROM tasks t JOIN users u ON u.id=t.customer_id WHERE t.customer_id=? ORDER BY t.updated_at DESC`).all(user.id).map(parseTask);
@@ -655,7 +669,9 @@ async function api(req, res, url) {
       (SELECT COUNT(*) FROM applications x WHERE x.task_id=t.id AND x.status!='WITHDRAWN') AS application_count
       FROM assignments a JOIN tasks t ON t.id=a.task_id JOIN users u ON u.id=t.customer_id
       WHERE a.executor_id=? ORDER BY a.updated_at DESC`).all(user.id).map(parseTask);
-    return json(res, 200, { created, applied, assigned });
+    return json(res, 200, user.primaryRole === 'CUSTOMER'
+      ? { created, applied: [], assigned: [] }
+      : { created: [], applied, assigned });
   }
 
   match = path.match(/^\/api\/tasks\/(\d+)\/work$/);
@@ -666,12 +682,16 @@ async function api(req, res, url) {
     const history = db.prepare(`SELECT h.status, h.note, h.created_at, u.name AS actor_name
       FROM task_history h LEFT JOIN users u ON u.id=h.actor_id WHERE h.task_id=? ORDER BY h.id`).all(taskId);
     const reviews = db.prepare(`SELECT r.*, u.name AS author_name FROM reviews r JOIN users u ON u.id=r.author_id WHERE r.task_id=? ORDER BY r.id`).all(taskId);
+    const counterpart = user.id === Number(assignment.customer_id)
+      ? { name: assignment.executor_name, email: assignment.executor_email, role: 'EXECUTOR' }
+      : { name: assignment.customer_name, email: assignment.customer_email, role: 'CUSTOMER' };
+    const demoSwitch = counterpart.email.endsWith('@demo.city') ? counterpart : null;
     return json(res, 200, { task, assignment: {
       id: Number(assignment.id), taskId, customerId: Number(assignment.customer_id), executorId: Number(assignment.executor_id),
       customerName: assignment.customer_name, executorName: assignment.executor_name, status: assignment.status,
       proposedPrice: Number(assignment.proposed_price), proposedDeadline: assignment.proposed_deadline,
       resultNote: assignment.result_note, resultUrl: assignment.result_url, revisionNote: assignment.revision_note,
-    }, history, reviews, viewerId: user.id });
+    }, history, reviews, viewerId: user.id, demoSwitch });
   }
 
   match = path.match(/^\/api\/tasks\/(\d+)\/work\/(start|submit|accept|revise|close)$/);
