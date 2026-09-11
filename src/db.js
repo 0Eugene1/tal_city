@@ -139,11 +139,11 @@ export function recordHistory(taskId, actorId, status, note = '') {
 }
 
 const seedExecutors = [
-  ['Иван Ковалёв', 'ivan@demo.city', ['Python', 'ROS2', 'Computer Vision', 'OpenCV'], 'Разрабатываю автономные системы и компьютерное зрение для городских роботов.', '5 лет в робототехнике, прототипы навигации и распознавания объектов.', 'Новосибирск', 'HYBRID', 1800],
+  ['Иван Ковалёв', 'ivan@demo.city', ['Python', 'ROS2', 'Computer Vision', 'OpenCV', 'ESP32', 'IoT'], 'Разрабатываю автономные системы и компьютерное зрение для городских роботов.', '5 лет в робототехнике, прототипы навигации, распознавания объектов и телеметрии IoT-устройств.', 'Новосибирск', 'HYBRID', 1800],
   ['Алёна Мельник', 'alena@demo.city', ['UX Research', 'Figma', 'CJM', 'Интервью'], 'Помогаю командам проверять продуктовые гипотезы через исследования.', 'Провела более 60 глубинных интервью для цифровых продуктов.', 'Томск', 'REMOTE', 1400],
   ['Сергей Волков', 'sergey@demo.city', ['Python', 'FastAPI', 'Telegram Bot', 'PostgreSQL'], 'Backend-разработчик, быстро собираю надёжные сервисы и ботов.', '4 года Python, запускал сервисы для сообществ до 50 000 пользователей.', 'Новосибирск', 'REMOTE', 1700],
   ['Майя Ким', 'maya@demo.city', ['Branding', 'Figma', 'Illustration', 'Event Design'], 'Визуальные системы для событий и технологичных брендов.', 'Айдентика 20+ конференций, навигация и digital-материалы.', 'Новосибирск', 'HYBRID', 1600],
-  ['Алексей Громов', 'alexey@demo.city', ['ESP32', 'IoT', 'Sensors', 'C++'], 'Инженер встраиваемых систем: от схемы до рабочего прототипа.', 'Умные счётчики, датчики среды, LoRaWAN и корпусирование.', 'Бердск', 'ONSITE', 1900],
+  ['Алексей Громов', 'alexey@demo.city', ['ESP32', 'IoT', 'Sensors', 'C++', 'Python'], 'Инженер встраиваемых систем: от схемы до рабочего прототипа.', 'Умные счётчики, датчики среды, LoRaWAN, Python-телеметрия и корпусирование.', 'Бердск', 'ONSITE', 1900],
   ['Дарья Орлова', 'daria@demo.city', ['React', 'TypeScript', 'Node.js', 'UI'], 'Создаю быстрые и понятные веб-продукты для ранних стадий.', '6 лет frontend, 15 запущенных MVP.', 'Омск', 'REMOTE', 2000],
   ['Никита Павлов', 'nikita@demo.city', ['Marketing', 'Analytics', 'Yandex Direct', 'Content'], 'Маркетинг с опорой на аналитику и короткие эксперименты.', 'Запускал продвижение локальных сервисов и образовательных проектов.', 'Новосибирск', 'HYBRID', 1500],
   ['Елена Тихонова', 'elena@demo.city', ['Video', 'Editing', 'Motion', 'DaVinci Resolve'], 'Снимаю и монтирую короткие истории о людях и проектах.', 'Документальные ролики, интервью, репортажи с событий.', 'Новосибирск', 'ONSITE', 1300],
@@ -167,7 +167,7 @@ const seedExecutors = [
 
 const seedTasks = [
   ['AI-бот для навигации по сообществу', 'Нужен Telegram-бот, который ответит на частые вопросы участников и поможет найти нужный раздел базы знаний.', 'Работающий бот, репозиторий и инструкция запуска.', 'AI', ['Python', 'Telegram Bot', 'NLP'], 120000, '2026-10-20', 'Новосибирск', 'REMOTE'],
-  ['Прототип умной урны', 'Собрать прототип контроля заполненности уличной урны и передачу показаний на простую панель.', 'Стабильный прототип датчика с демонстрацией и схемой.', 'Робототехника', ['ESP32', 'IoT', 'Sensors'], 180000, '2026-11-15', 'Новосибирск', 'HYBRID'],
+  ['Автономная система контроля заполненности урн', 'Городской команде нужно сократить переполнения урн и лишние выезды обслуживающих бригад. Соберите прототип, который оценивает заполненность, при необходимости подтверждает её камерой и передаёт данные на простую панель.', 'Работающий прототип на ESP32, Python-сервис приёма данных, демонстрация распознавания заполненности, схема и инструкция запуска.', 'Робототехника', ['IoT', 'ESP32', 'Computer Vision', 'Python'], 180000, '2026-11-15', 'Новосибирск', 'HYBRID'],
   ['Система автоматического полива', 'Спроектировать контроллер полива для общественной теплицы с учётом влажности почвы.', 'Прототип на двух зонах, BOM и инструкция.', 'Инженерия', ['Arduino', 'C++', 'Sensors'], 95000, '2026-10-30', 'Бердск', 'ONSITE'],
   ['Лендинг акселератора городских проектов', 'Нужна понятная посадочная страница с программой, наставниками и формой заявки.', 'Адаптивный опубликованный лендинг и передача макетов.', 'IT', ['Tilda', 'Figma', 'Copywriting'], 70000, '2026-10-05', 'Удалённо', 'REMOTE'],
   ['Визуальная система фестиваля науки', 'Разработать ключевой визуал, правила афиш и шаблоны для соцсетей.', 'Концепция, 8 шаблонов и краткий гайд.', 'Дизайн', ['Branding', 'Figma', 'Event Design'], 140000, '2026-11-01', 'Новосибирск', 'HYBRID'],
@@ -216,3 +216,113 @@ function seed() {
 }
 
 seed();
+
+function isoBefore(days, hours = 0) {
+  return new Date(Date.now() - ((days * 24) - hours) * 3_600_000).toISOString();
+}
+
+function seedProductDemo() {
+  const footprint = db.prepare(`SELECT
+    (SELECT COUNT(*) FROM users) AS users,
+    (SELECT COUNT(*) FROM tasks) AS tasks,
+    (SELECT COUNT(*) FROM applications) AS applications,
+    (SELECT COUNT(*) FROM assignments) AS assignments`).get();
+  if (Number(footprint.users) !== 27 || Number(footprint.tasks) !== 10 || Number(footprint.applications) || Number(footprint.assignments)) return;
+
+  const customer = db.prepare("SELECT id FROM users WHERE email='customer@demo.city'").get();
+  const ivan = db.prepare("SELECT id FROM users WHERE email='ivan@demo.city'").get();
+  const alexey = db.prepare("SELECT id FROM users WHERE email='alexey@demo.city'").get();
+  const ilya = db.prepare("SELECT id FROM users WHERE email='ilya@demo.city'").get();
+  const sergey = db.prepare("SELECT id FROM users WHERE email='sergey@demo.city'").get();
+  const smartTask = db.prepare("SELECT id FROM tasks WHERE customer_id=? AND title IN ('Прототип умной урны','Автономная система контроля заполненности урн')").get(customer?.id);
+  const completedTask = db.prepare("SELECT id FROM tasks WHERE customer_id=? AND title='AI-бот для навигации по сообществу'").get(customer?.id);
+  if (!customer || !ivan || !alexey || !ilya || !sergey || !smartTask || !completedTask) return;
+
+  const completedPublished = isoBefore(14);
+  const smartPublished = isoBefore(2);
+  const insertApplication = db.prepare(`INSERT INTO applications
+    (task_id, executor_id, message, proposed_price, proposed_deadline, status, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`);
+  const insertHistory = db.prepare(`INSERT INTO task_history (task_id, actor_id, status, note, created_at)
+    VALUES (?, ?, ?, ?, ?)`);
+  const insertEvent = db.prepare(`INSERT INTO analytics_events (name, user_id, task_id, metadata, created_at)
+    VALUES (?, ?, ?, ?, ?)`);
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare(`UPDATE profiles SET skills=?, experience=?, updated_at=? WHERE user_id=?`).run(
+      JSON.stringify(['Python', 'ROS2', 'Computer Vision', 'OpenCV', 'ESP32', 'IoT']),
+      '5 лет в робототехнике, прототипы навигации, распознавания объектов и телеметрии IoT-устройств.', now(), ivan.id,
+    );
+    db.prepare(`UPDATE profiles SET skills=?, experience=?, updated_at=? WHERE user_id=?`).run(
+      JSON.stringify(['ESP32', 'IoT', 'Sensors', 'C++', 'Python']),
+      'Умные счётчики, датчики среды, LoRaWAN, Python-телеметрия и корпусирование.', now(), alexey.id,
+    );
+    db.prepare(`UPDATE tasks SET title=?, description=?, expected_result=?, skills=?, status='REVIEWING',
+      created_at=?, updated_at=?, published_at=? WHERE id=?`).run(
+      'Автономная система контроля заполненности урн',
+      'Городской команде нужно сократить переполнения урн и лишние выезды обслуживающих бригад. Соберите прототип, который оценивает заполненность, при необходимости подтверждает её камерой и передаёт данные на простую панель.',
+      'Работающий прототип на ESP32, Python-сервис приёма данных, демонстрация распознавания заполненности, схема и инструкция запуска.',
+      JSON.stringify(['IoT', 'ESP32', 'Computer Vision', 'Python']), smartPublished, isoBefore(2, 6), smartPublished, smartTask.id,
+    );
+
+    const smartApplications = [
+      [ivan.id, 'Соберу ESP32-телеметрию и Python-сервис, затем проверю распознавание заполненности на серии реальных кадров.', 175000, '2026-11-10', isoBefore(2, 2), 100],
+      [alexey.id, 'Спроектирую датчик и корпус, настрою передачу данных и подготовлю Python-скрипт для демонстрационного стенда.', 165000, '2026-11-12', isoBefore(2, 4), 75],
+      [ilya.id, 'Возьму на себя электронику, питание и плату ESP32; для компьютерного зрения предложу подключить профильного коллегу.', 145000, '2026-11-14', isoBefore(2, 6), 25],
+    ];
+    for (const [executorId, message, price, deadline, createdAt, score] of smartApplications) {
+      const result = insertApplication.run(smartTask.id, executorId, message, price, deadline, 'SUBMITTED', createdAt);
+      insertEvent.run('application_created', executorId, smartTask.id, JSON.stringify({ applicationId: Number(result.lastInsertRowid), matchScore: score, demo: true }), createdAt);
+    }
+    insertHistory.run(smartTask.id, customer.id, 'PUBLISHED', 'Задача опубликована', smartPublished);
+    insertHistory.run(smartTask.id, ivan.id, 'REVIEWING', 'Получен первый отклик', isoBefore(2, 2));
+    insertEvent.run('task_published', customer.id, smartTask.id, JSON.stringify({ demo: true }), smartPublished);
+
+    db.prepare(`UPDATE tasks SET status='CLOSED', assigned_executor_id=?, created_at=?, updated_at=?, published_at=? WHERE id=?`)
+      .run(sergey.id, completedPublished, isoBefore(8), completedPublished, completedTask.id);
+    const completedApplicationAt = isoBefore(14, 5);
+    const completedApplication = insertApplication.run(
+      completedTask.id, sergey.id,
+      'Соберу Telegram-бота на Python, подключу базу знаний и передам измеримый отчёт по качеству ответов.',
+      115000, '2026-10-15', 'ACCEPTED', completedApplicationAt,
+    );
+    db.prepare(`INSERT INTO assignments
+      (task_id, application_id, customer_id, executor_id, status, result_note, result_url, revision_note, created_at, updated_at)
+      VALUES (?, ?, ?, ?, 'CLOSED', ?, '', '', ?, ?)`).run(
+      completedTask.id, completedApplication.lastInsertRowid, customer.id, sergey.id,
+      'Telegram-бот запущен: подключены 42 ответа из базы знаний, добавлен поиск по разделам и инструкция для редактора контента.',
+      isoBefore(13), isoBefore(8),
+    );
+    const completedSteps = [
+      ['PUBLISHED', customer.id, 'Задача опубликована', completedPublished],
+      ['REVIEWING', sergey.id, 'Получен первый отклик', completedApplicationAt],
+      ['ASSIGNED', customer.id, 'Исполнитель выбран', isoBefore(13)],
+      ['IN_PROGRESS', sergey.id, 'Исполнитель начал работу', isoBefore(12)],
+      ['SUBMITTED', sergey.id, 'Результат отправлен заказчику', isoBefore(9)],
+      ['ACCEPTED', customer.id, 'Результат принят', isoBefore(8, -1)],
+      ['CLOSED', customer.id, 'Задача закрыта', isoBefore(8)],
+    ];
+    for (const [status, actorId, note, createdAt] of completedSteps) insertHistory.run(completedTask.id, actorId, status, note, createdAt);
+    db.prepare(`INSERT INTO reviews (task_id, author_id, recipient_id, rating, text, created_at) VALUES (?, ?, ?, 5, ?, ?)`)
+      .run(completedTask.id, customer.id, sergey.id, 'Сергей быстро собрал рабочий бот и оставил понятную инструкцию для команды.', isoBefore(8, 1));
+    db.prepare(`INSERT INTO reviews (task_id, author_id, recipient_id, rating, text, created_at) VALUES (?, ?, ?, 5, ?, ?)`)
+      .run(completedTask.id, sergey.id, customer.id, 'Заказчик дал чёткую базу знаний и оперативно проверял промежуточные версии.', isoBefore(8, 2));
+    const completedEvents = [
+      ['task_published', customer.id, completedPublished],
+      ['application_created', sergey.id, completedApplicationAt],
+      ['executor_selected', customer.id, isoBefore(13)],
+      ['task_started', sergey.id, isoBefore(12)],
+      ['result_submitted', sergey.id, isoBefore(9)],
+      ['result_accepted', customer.id, isoBefore(8, -1)],
+      ['task_closed', customer.id, isoBefore(8)],
+    ];
+    for (const [name, userId, createdAt] of completedEvents) insertEvent.run(name, userId, completedTask.id, JSON.stringify({ demo: true }), createdAt);
+    db.exec('COMMIT');
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+seedProductDemo();

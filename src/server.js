@@ -21,6 +21,12 @@ const CATEGORIES = ['IT', 'AI', 'Дизайн', 'Маркетинг', 'Инже�
 const FORMATS = ['REMOTE', 'HYBRID', 'ONSITE'];
 const TASK_STATUSES = ['DRAFT', 'PUBLISHED', 'REVIEWING', 'ASSIGNED', 'IN_PROGRESS', 'SUBMITTED', 'ACCEPTED', 'REJECTED', 'CLOSED'];
 const PUBLIC_TASK_STATUSES = ['PUBLISHED', 'REVIEWING'];
+const MIN_PROJECT_PRICE = 1_000;
+const MAX_PROJECT_PRICE = 100_000_000;
+const MIN_HOURLY_RATE = 100;
+const MAX_HOURLY_RATE = 100_000;
+const MAX_TASK_HORIZON_DAYS = 730;
+const RELEVANT_MATCH_SCORE = 50;
 
 class ApiError extends Error {
   constructor(status, message, details = undefined) {
@@ -57,12 +63,51 @@ function text(value, { required = false, min = 0, max = 5000, label = 'Поле'
   return result;
 }
 
-function positiveNumber(value, label, { allowZero = true } = {}) {
+function integerInRange(value, label, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
   const number = Number(value);
-  if (!Number.isFinite(number) || !Number.isInteger(number) || number < (allowZero ? 0 : 1)) {
-    throw new ApiError(422, `${label}: укажите целое положительное число`);
+  if (!Number.isFinite(number) || !Number.isSafeInteger(number) || number < min || number > max) {
+    throw new ApiError(422, `${label}: укажите целое число от ${min.toLocaleString('ru-RU')} до ${max.toLocaleString('ru-RU')}`);
   }
   return number;
+}
+
+function localDateString(value = new Date()) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, '0');
+  const day = String(value.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function dateWithOffset(days) {
+  const value = new Date();
+  value.setHours(12, 0, 0, 0);
+  value.setDate(value.getDate() + days);
+  return localDateString(value);
+}
+
+function validDateOnly(value, label, { min, max } = {}) {
+  const result = text(value, { required: true, max: 10, label });
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(result)) throw new ApiError(422, `${label}: укажите корректную дату`);
+  const [year, month, day] = result.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  if (parsed.getUTCFullYear() !== year || parsed.getUTCMonth() !== month - 1 || parsed.getUTCDate() !== day) {
+    throw new ApiError(422, `${label}: такой даты не существует`);
+  }
+  if (min && result < min) throw new ApiError(422, `${label}: дата должна быть не раньше ${min}`);
+  if (max && result > max) throw new ApiError(422, `${label}: дата должна быть не позже ${max}`);
+  return result;
+}
+
+function optionalHttpUrl(value, label) {
+  const result = text(value, { max: 500, label });
+  if (!result) return '';
+  try {
+    const parsed = new URL(result);
+    if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('protocol');
+  } catch {
+    throw new ApiError(422, `${label}: используйте полную ссылку с http:// или https://`);
+  }
+  return result;
 }
 
 function list(value, label = 'Навыки') {
@@ -92,7 +137,14 @@ function parseTask(row) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     publishedAt: row.published_at,
-    customer: row.customer_name ? { id: Number(row.customer_id), name: row.customer_name } : undefined,
+    expired: row.deadline < localDateString(),
+    customer: row.customer_name ? {
+      id: Number(row.customer_id),
+      name: row.customer_name,
+      memberSince: row.customer_created_at || undefined,
+      publishedTasks: row.customer_published_tasks === undefined ? undefined : Number(row.customer_published_tasks),
+      completedTasks: row.customer_completed_tasks === undefined ? undefined : Number(row.customer_completed_tasks),
+    } : undefined,
     applicationCount: row.application_count === undefined ? undefined : Number(row.application_count),
   };
 }
@@ -180,15 +232,62 @@ function setSession(res, userId, req) {
 }
 
 function getTask(id) {
-  return db.prepare(`SELECT t.*, u.name AS customer_name,
-      (SELECT COUNT(*) FROM applications a WHERE a.task_id = t.id AND a.status != 'WITHDRAWN') AS application_count
+  return db.prepare(`SELECT t.*, u.name AS customer_name, u.created_at AS customer_created_at,
+      (SELECT COUNT(*) FROM applications a WHERE a.task_id = t.id AND a.status != 'WITHDRAWN') AS application_count,
+      (SELECT COUNT(*) FROM tasks own WHERE own.customer_id=t.customer_id AND own.published_at IS NOT NULL) AS customer_published_tasks,
+      (SELECT COUNT(*) FROM tasks own WHERE own.customer_id=t.customer_id AND own.status='CLOSED') AS customer_completed_tasks
     FROM tasks t JOIN users u ON u.id = t.customer_id WHERE t.id = ?`).get(id);
+}
+
+function productMetrics({ demoOnly = false } = {}) {
+  const audienceCondition = demoOnly ? "customer.email LIKE '%@demo.city'" : "customer.email NOT LIKE '%@demo.city'";
+  const applicationRows = db.prepare(`SELECT t.id AS task_id, t.skills AS task_skills, t.published_at,
+      a.id AS application_id, a.created_at AS application_created_at, p.skills AS profile_skills
+    FROM tasks t
+    JOIN users customer ON customer.id=t.customer_id
+    LEFT JOIN applications a ON a.task_id=t.id AND a.status!='WITHDRAWN'
+    LEFT JOIN profiles p ON p.user_id=a.executor_id
+    WHERE t.published_at IS NOT NULL AND ${audienceCondition}`).all();
+  const tasksWithApplications = new Set();
+  const tasksWithRelevantCandidates = new Set();
+  const firstRelevantHours = new Map();
+
+  for (const row of applicationRows) {
+    if (row.application_id === null) continue;
+    const taskId = Number(row.task_id);
+    tasksWithApplications.add(taskId);
+    const match = calculateMatch(toJson(row.task_skills), toJson(row.profile_skills));
+    if (match.score < RELEVANT_MATCH_SCORE) continue;
+    tasksWithRelevantCandidates.add(taskId);
+    const hours = Math.max(0, (new Date(row.application_created_at) - new Date(row.published_at)) / 3_600_000);
+    if (!firstRelevantHours.has(taskId) || hours < firstRelevantHours.get(taskId)) firstRelevantHours.set(taskId, hours);
+  }
+
+  const times = [...firstRelevantHours.values()].sort((a, b) => a - b);
+  const middle = Math.floor(times.length / 2);
+  const medianHours = times.length
+    ? (times.length % 2 ? times[middle] : (times[middle - 1] + times[middle]) / 2)
+    : null;
+
+  return {
+    publishedTasks: Number(db.prepare(`SELECT COUNT(*) AS n FROM tasks t JOIN users customer ON customer.id=t.customer_id
+      WHERE t.published_at IS NOT NULL AND ${audienceCondition}`).get().n),
+    tasksWithApplications: tasksWithApplications.size,
+    tasksWithRelevantCandidates: tasksWithRelevantCandidates.size,
+    assignments: Number(db.prepare(`SELECT COUNT(*) AS n FROM assignments x JOIN tasks t ON t.id=x.task_id
+      JOIN users customer ON customer.id=t.customer_id WHERE ${audienceCondition}`).get().n),
+    completions: Number(db.prepare(`SELECT COUNT(*) AS n FROM assignments x JOIN tasks t ON t.id=x.task_id
+      JOIN users customer ON customer.id=t.customer_id WHERE x.status='CLOSED' AND ${audienceCondition}`).get().n),
+    medianFirstRelevantHours: medianHours === null ? null : Math.round(medianHours * 10) / 10,
+    relevantMatchThreshold: RELEVANT_MATCH_SCORE,
+  };
 }
 
 function ensureTaskVisible(row, user) {
   if (!row) throw new ApiError(404, 'Задача не найдена');
   const publicTask = PUBLIC_TASK_STATUSES.includes(row.status) && !row.is_hidden;
-  const participant = user && (user.isAdmin || user.id === Number(row.customer_id) || user.id === Number(row.assigned_executor_id));
+  const applicant = user && db.prepare('SELECT 1 FROM applications WHERE task_id=? AND executor_id=?').get(Number(row.id), user.id);
+  const participant = user && (user.isAdmin || user.id === Number(row.customer_id) || user.id === Number(row.assigned_executor_id) || applicant);
   if (!publicTask && !participant) throw new ApiError(404, 'Задача не найдена');
 }
 
@@ -197,15 +296,16 @@ function validateTask(body) {
   const format = text(body.format, { required: true, max: 20, label: 'Формат' });
   if (!CATEGORIES.includes(category)) throw new ApiError(422, 'Выберите категорию из списка');
   if (!FORMATS.includes(format)) throw new ApiError(422, 'Выберите формат работы');
-  const deadline = text(body.deadline, { required: true, max: 10, label: 'Срок' });
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(deadline)) throw new ApiError(422, 'Укажите дату завершения');
+  const deadline = validDateOnly(body.deadline, 'Срок', { min: dateWithOffset(1), max: dateWithOffset(MAX_TASK_HORIZON_DAYS) });
+  const skills = list(body.skills);
+  if (!skills.length) throw new ApiError(422, 'Компетенции: добавьте хотя бы один навык');
   return {
     title: text(body.title, { required: true, min: 5, max: 120, label: 'Название' }),
     description: text(body.description, { required: true, min: 30, max: 5000, label: 'Описание' }),
     expectedResult: text(body.expectedResult, { required: true, min: 10, max: 1000, label: 'Ожидаемый результат' }),
     category,
-    skills: list(body.skills),
-    budget: positiveNumber(body.budget, 'Бюджет'),
+    skills,
+    budget: integerInRange(body.budget, 'Бюджет', { min: MIN_PROJECT_PRICE, max: MAX_PROJECT_PRICE }),
     deadline,
     location: text(body.location, { required: true, max: 100, label: 'Локация' }),
     format,
@@ -259,9 +359,9 @@ async function api(req, res, url) {
   if (method === 'GET' && path === '/api/bootstrap') {
     const user = sessionUser(req);
     const stats = db.prepare(`SELECT
-      (SELECT COUNT(*) FROM tasks WHERE status IN ('PUBLISHED','REVIEWING') AND is_hidden = 0) AS tasks,
+      (SELECT COUNT(*) FROM tasks WHERE status IN ('PUBLISHED','REVIEWING') AND is_hidden = 0 AND deadline >= ?) AS tasks,
       (SELECT COUNT(*) FROM profiles WHERE completed_at IS NOT NULL) AS executors,
-      (SELECT COUNT(*) FROM assignments) AS assignments`).get();
+      (SELECT COUNT(*) FROM assignments) AS assignments`).get(localDateString());
     return json(res, 200, { user, categories: CATEGORIES, formats: FORMATS, stats });
   }
 
@@ -319,7 +419,9 @@ async function api(req, res, url) {
       location: text(body.location, { required: true, max: 100, label: 'Локация' }),
       workFormat: FORMATS.includes(body.workFormat) ? body.workFormat : null,
       availability: text(body.availability, { required: true, max: 200, label: 'Доступность' }),
-      desiredRate: body.desiredRate === '' || body.desiredRate === null ? null : positiveNumber(body.desiredRate, 'Ставка'),
+      desiredRate: body.desiredRate === '' || body.desiredRate === null
+        ? null
+        : integerInRange(body.desiredRate, 'Ставка', { min: MIN_HOURLY_RATE, max: MAX_HOURLY_RATE }),
     };
     if (!profile.skills.length) throw new ApiError(422, 'Добавьте хотя бы один навык');
     if (!profile.workFormat) throw new ApiError(422, 'Выберите формат работы');
@@ -340,18 +442,32 @@ async function api(req, res, url) {
 
   let match = path.match(/^\/api\/profile\/(\d+)$/);
   if (method === 'GET' && match) {
-    const row = db.prepare(`SELECT u.name, p.* FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = ?`).get(Number(match[1]));
+    const profileId = Number(match[1]);
+    const row = db.prepare(`SELECT u.name, p.* FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = ?`).get(profileId);
     if (!row) throw new ApiError(404, 'Профиль не найден');
     const reviews = db.prepare(`SELECT r.rating, r.text, r.created_at, u.name AS author_name, t.title AS task_title
       FROM reviews r JOIN users u ON u.id=r.author_id JOIN tasks t ON t.id=r.task_id
-      WHERE r.recipient_id=? ORDER BY r.created_at DESC`).all(Number(match[1]));
-    return json(res, 200, { profile: parseProfile(row), reviews });
+      WHERE r.recipient_id=? ORDER BY r.created_at DESC`).all(profileId);
+    const activity = db.prepare(`SELECT
+      COUNT(*) AS assignments,
+      SUM(CASE WHEN status='CLOSED' THEN 1 ELSE 0 END) AS completed_tasks,
+      SUM(CASE WHEN status IN ('ASSIGNED','IN_PROGRESS','SUBMITTED','ACCEPTED') THEN 1 ELSE 0 END) AS active_tasks
+      FROM assignments WHERE executor_id=?`).get(profileId);
+    const rating = db.prepare('SELECT COUNT(*) AS reviews_count, AVG(rating) AS average_rating FROM reviews WHERE recipient_id=?').get(profileId);
+    const stats = {
+      assignments: Number(activity.assignments || 0),
+      completedTasks: Number(activity.completed_tasks || 0),
+      activeTasks: Number(activity.active_tasks || 0),
+      reviewsCount: Number(rating.reviews_count || 0),
+      averageRating: rating.average_rating === null ? null : Math.round(Number(rating.average_rating) * 10) / 10,
+    };
+    return json(res, 200, { profile: parseProfile(row), reviews, stats });
   }
 
   if (method === 'GET' && path === '/api/tasks') {
     const user = sessionUser(req);
-    const where = [`t.status IN ('PUBLISHED','REVIEWING')`, 't.is_hidden = 0'];
-    const params = [];
+    const where = [`t.status IN ('PUBLISHED','REVIEWING')`, 't.is_hidden = 0', 't.deadline >= ?'];
+    const params = [localDateString()];
     if (url.searchParams.get('q')) {
       where.push('(t.title LIKE ? OR t.description LIKE ? OR t.skills LIKE ?)');
       const q = `%${url.searchParams.get('q').slice(0, 80)}%`; params.push(q, q, q);
@@ -402,6 +518,10 @@ async function api(req, res, url) {
     if (!user || (user.id !== task.customerId && !user.isAdmin)) track('task_viewed', { userId: user?.id, taskId });
     const response = { task };
     const isOwner = user && (user.id === task.customerId || user.isAdmin);
+    if (user && !isOwner) {
+      const myApplication = db.prepare('SELECT * FROM applications WHERE task_id=? AND executor_id=?').get(taskId, user.id);
+      if (myApplication) response.myApplication = parseApplication(myApplication);
+    }
     if (isOwner) {
       const appRows = db.prepare(`SELECT a.*, u.name AS executor_name, p.bio, p.skills AS profile_skills,
         p.experience, p.location AS profile_location, p.work_format, p.desired_rate
@@ -413,7 +533,7 @@ async function api(req, res, url) {
       response.recommendations = profileRows.map((profileRow) => {
         const profile = parseProfile(profileRow);
         return { profile, match: calculateMatch(task.skills, profile.skills) };
-      }).sort((a, b) => b.match.score - a.match.score).slice(0, 5);
+      }).filter((item) => item.match.score > 0).sort((a, b) => b.match.score - a.match.score).slice(0, 5);
     }
     return json(res, 200, response);
   }
@@ -426,6 +546,11 @@ async function api(req, res, url) {
     if (!user.isAdmin && user.id !== Number(row.customer_id)) throw new ApiError(403, 'Редактировать может только заказчик');
     if (!['DRAFT', 'PUBLISHED', 'REVIEWING'].includes(row.status)) throw new ApiError(409, 'Назначенную задачу уже нельзя редактировать');
     const task = validateTask(await readJson(req));
+    const latestOffer = db.prepare(`SELECT MAX(proposed_deadline) AS deadline FROM applications
+      WHERE task_id=? AND status IN ('SUBMITTED','SHORTLISTED')`).get(taskId).deadline;
+    if (latestOffer && task.deadline < latestOffer) {
+      throw new ApiError(409, `Срок задачи не может быть раньше уже предложенного срока ${latestOffer}`);
+    }
     db.prepare(`UPDATE tasks SET title=?,description=?,expected_result=?,category=?,skills=?,budget=?,deadline=?,location=?,format=?,updated_at=? WHERE id=?`)
       .run(task.title, task.description, task.expectedResult, task.category, JSON.stringify(task.skills), task.budget,
         task.deadline, task.location, task.format, now(), taskId);
@@ -456,11 +581,11 @@ async function api(req, res, url) {
     if (!user.profileCompleted) throw new ApiError(409, 'Сначала заполните профиль исполнителя');
     if (user.id === Number(task.customer_id)) throw new ApiError(409, 'Нельзя откликнуться на собственную задачу');
     if (!PUBLIC_TASK_STATUSES.includes(task.status)) throw new ApiError(409, 'Задача больше не принимает отклики');
+    if (task.deadline < localDateString()) throw new ApiError(409, 'Срок задачи уже истёк — отклики больше не принимаются');
     const body = await readJson(req);
     const message = text(body.message, { required: true, min: 20, max: 1500, label: 'Сообщение' });
-    const price = positiveNumber(body.proposedPrice, 'Стоимость');
-    const deadline = text(body.proposedDeadline, { required: true, max: 10, label: 'Срок' });
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(deadline)) throw new ApiError(422, 'Укажите предложенный срок');
+    const price = integerInRange(body.proposedPrice, 'Стоимость', { min: MIN_PROJECT_PRICE, max: MAX_PROJECT_PRICE });
+    const deadline = validDateOnly(body.proposedDeadline, 'Предложенный срок', { min: localDateString(), max: task.deadline });
     try {
       const result = db.prepare(`INSERT INTO applications
         (task_id, executor_id, message, proposed_price, proposed_deadline, status, created_at)
@@ -470,7 +595,8 @@ async function api(req, res, url) {
         db.prepare(`UPDATE tasks SET status='REVIEWING', updated_at=? WHERE id=?`).run(now(), taskId);
         recordHistory(taskId, user.id, 'REVIEWING', 'Получен первый отклик');
       }
-      track('application_created', { userId: user.id, taskId, metadata: { applicationId: Number(result.lastInsertRowid) } });
+      const matchScore = calculateMatch(toJson(task.skills), user.skills).score;
+      track('application_created', { userId: user.id, taskId, metadata: { applicationId: Number(result.lastInsertRowid), matchScore } });
       return json(res, 201, { applicationId: Number(result.lastInsertRowid) });
     } catch (error) {
       if (String(error.message).includes('UNIQUE')) throw new ApiError(409, 'Вы уже откликнулись на эту задачу');
@@ -560,7 +686,7 @@ async function api(req, res, url) {
     } else if (action === 'submit') {
       if (user.id !== Number(assignment.executor_id)) throw new ApiError(403, 'Отправить результат может исполнитель');
       const resultNote = text(body.resultNote, { required: true, min: 20, max: 3000, label: 'Описание результата' });
-      const resultUrl = text(body.resultUrl, { max: 500, label: 'Ссылка на результат' });
+      const resultUrl = optionalHttpUrl(body.resultUrl, 'Ссылка на результат');
       transition({ taskId, actorId: user.id, from: ['IN_PROGRESS'], to: 'SUBMITTED', assignmentFields: { result_note: resultNote, result_url: resultUrl, revision_note: '' }, event: 'result_submitted', note: 'Результат отправлен заказчику' });
     } else if (action === 'accept') {
       if (user.id !== Number(assignment.customer_id)) throw new ApiError(403, 'Принять результат может заказчик');
@@ -582,8 +708,7 @@ async function api(req, res, url) {
     const { user, assignment } = requireAssignmentAccess(req, taskId);
     if (!['ACCEPTED', 'CLOSED'].includes(assignment.status)) throw new ApiError(409, 'Отзыв доступен после принятия результата');
     const body = await readJson(req);
-    const rating = positiveNumber(body.rating, 'Оценка', { allowZero: false });
-    if (rating > 5) throw new ApiError(422, 'Оценка должна быть от 1 до 5');
+    const rating = integerInRange(body.rating, 'Оценка', { min: 1, max: 5 });
     const reviewText = text(body.text, { required: true, min: 10, max: 1000, label: 'Отзыв' });
     const recipientId = user.id === Number(assignment.customer_id) ? Number(assignment.executor_id) : Number(assignment.customer_id);
     try {
@@ -606,14 +731,7 @@ async function api(req, res, url) {
       FROM tasks t JOIN users u ON u.id=t.customer_id ORDER BY t.updated_at DESC`).all().map(parseTask);
     const applications = db.prepare('SELECT status, COUNT(*) AS count FROM applications GROUP BY status').all();
     const events = db.prepare('SELECT name, COUNT(*) AS count FROM analytics_events GROUP BY name ORDER BY count DESC').all();
-    const funnel = {
-      tasks: Number(db.prepare(`SELECT COUNT(*) AS n FROM analytics_events WHERE name='task_published'`).get().n),
-      views: Number(db.prepare(`SELECT COUNT(*) AS n FROM analytics_events WHERE name='task_viewed'`).get().n),
-      applications: Number(db.prepare(`SELECT COUNT(*) AS n FROM analytics_events WHERE name='application_created'`).get().n),
-      assignments: Number(db.prepare(`SELECT COUNT(*) AS n FROM analytics_events WHERE name='executor_selected'`).get().n),
-      completions: Number(db.prepare(`SELECT COUNT(*) AS n FROM analytics_events WHERE name='task_closed'`).get().n),
-    };
-    return json(res, 200, { users, tasks, applications, events, funnel });
+    return json(res, 200, { users, tasks, applications, events, funnel: productMetrics(), demoFunnel: productMetrics({ demoOnly: true }) });
   }
 
   match = path.match(/^\/api\/admin\/tasks\/(\d+)$/);
@@ -623,11 +741,31 @@ async function api(req, res, url) {
     const body = await readJson(req);
     const row = getTask(taskId);
     if (!row) throw new ApiError(404, 'Задача не найдена');
-    const hidden = body.hidden === undefined ? Number(row.is_hidden) : body.hidden ? 1 : 0;
+    if (body.hidden !== undefined && typeof body.hidden !== 'boolean') throw new ApiError(422, 'Видимость должна быть логическим значением');
+    let hidden = body.hidden === undefined ? Number(row.is_hidden) : body.hidden ? 1 : 0;
     const status = body.status === undefined ? row.status : body.status;
     if (!TASK_STATUSES.includes(status)) throw new ApiError(422, 'Недопустимый статус');
-    db.prepare('UPDATE tasks SET is_hidden=?, status=?, updated_at=? WHERE id=?').run(hidden, status, now(), taskId);
-    recordHistory(taskId, admin.id, status, hidden ? 'Скрыто модератором' : 'Изменено модератором');
+    if (status !== row.status) {
+      const moderationStatuses = ['DRAFT', 'PUBLISHED', 'REVIEWING', 'REJECTED'];
+      const allowedTransitions = {
+        DRAFT: ['PUBLISHED', 'REJECTED'],
+        PUBLISHED: ['REJECTED'],
+        REVIEWING: ['REJECTED'],
+        REJECTED: ['PUBLISHED'],
+      };
+      if (!moderationStatuses.includes(row.status) || !allowedTransitions[row.status]?.includes(status)) {
+        throw new ApiError(409, 'Модератор не может менять рабочий статус назначения. Используйте действия заказчика и исполнителя.');
+      }
+      if (status === 'REJECTED') hidden = 1;
+      if (status === 'PUBLISHED') hidden = 0;
+    }
+    const timestamp = now();
+    db.prepare(`UPDATE tasks SET is_hidden=?, status=?, published_at=CASE WHEN ?='PUBLISHED' THEN COALESCE(published_at, ?) ELSE published_at END, updated_at=? WHERE id=?`)
+      .run(hidden, status, status, timestamp, timestamp, taskId);
+    const note = status !== row.status
+      ? `Модератор изменил статус: ${row.status} → ${status}`
+      : hidden !== Number(row.is_hidden) ? (hidden ? 'Скрыто модератором' : 'Снова показано модератором') : 'Проверено модератором';
+    recordHistory(taskId, admin.id, status, note);
     return json(res, 200, { ok: true });
   }
 

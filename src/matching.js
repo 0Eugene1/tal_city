@@ -26,13 +26,17 @@ export function calculateMatch(taskSkills = [], executorSkills = []) {
   const available = new Set(executorSkills.map(normalizeSkill).filter(Boolean));
   const matchedNormalized = required.filter((skill) => available.has(skill));
   const matchedSkills = taskSkills.filter((skill) => matchedNormalized.includes(normalizeSkill(skill)));
+  const missingSkills = taskSkills.filter((skill) => !matchedNormalized.includes(normalizeSkill(skill)));
   const score = required.length ? Math.round((matchedNormalized.length / required.length) * 100) : 0;
 
   return {
     score,
     matchedSkills,
-    explanation: matchedSkills.length
-      ? `Совпадают навыки: ${matchedSkills.join(', ')}`
-      : 'Точных совпадений пока нет — изучите опыт и предложение кандидата.',
+    missingSkills,
+    explanation: required.length === 0
+      ? 'В задаче не указаны навыки — оцените опыт кандидата вручную.'
+      : matchedSkills.length
+        ? `Совпало ${matchedSkills.length} из ${required.length} требуемых навыков.`
+        : 'Точных совпадений нет — оцените опыт и предложение кандидата вручную.',
   };
 }
