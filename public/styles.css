@@ -167,6 +167,8 @@ input[type="checkbox"], input[type="radio"] { width: auto; accent-color: var(--b
 .checkbox span { font-size: 13px; line-height: 1.45; }
 .form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 24px; }
 .inline-error { margin: 12px 0 0; padding: 10px 12px; color: var(--danger); background: #fff1f1; border-radius: 9px; font-size: 13px; }
+.field [aria-invalid="true"] { border-color: var(--danger); box-shadow: 0 0 0 3px rgba(139, 47, 47, .1); }
+.field-error { margin-top: 7px; color: var(--danger) !important; font-weight: 700; }
 
 .detail-grid { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 26px; align-items: start; }
 .detail-main { display: grid; gap: 18px; }

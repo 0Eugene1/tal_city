@@ -125,7 +125,8 @@ db.exec(`
 
 export const now = () => new Date().toISOString();
 export const toJson = (value, fallback = []) => {
-  try { return JSON.parse(value); } catch { return fallback; }
+  if (value === null || value === undefined || value === '') return fallback;
+  try { return JSON.parse(value) ?? fallback; } catch { return fallback; }
 };
 
 export function track(name, { userId = null, taskId = null, metadata = {} } = {}) {

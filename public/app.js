@@ -49,7 +49,8 @@ function initials(name = '') {
 }
 
 function tags(items = [], className = '') {
-  return `<div class="tag-list">${items.map((item) => `<span class="tag ${className}">${esc(item)}</span>`).join('')}</div>`;
+  const safeItems = Array.isArray(items) ? items : [];
+  return `<div class="tag-list">${safeItems.map((item) => `<span class="tag ${className}">${esc(item)}</span>`).join('')}</div>`;
 }
 
 function statusBadge(status) {
@@ -285,7 +286,7 @@ function taskFormPage(task = null) {
   const minDate = dateWithOffset(1);
   const maxDate = dateWithOffset(730);
   app.innerHTML = `<div class="page-shell narrow">${backControl(editing ? 'К задаче' : 'Мои задачи', editing ? `/tasks/${task.id}` : '/my-tasks')}<div class="page-title-row"><div><p class="eyebrow">${editing ? 'Редактирование' : 'Новая задача'}</p><h1>${editing ? 'Уточните задачу' : 'Что нужно сделать?'}</h1><p class="lead">Опишите результат так, чтобы специалист мог оценить объём работы.</p></div></div>
-    <form class="form-card" id="task-form" ${editing ? `data-task-id="${task.id}"` : ''}>
+    <form class="form-card" id="task-form" novalidate ${editing ? `data-task-id="${task.id}"` : ''}>
       <section class="form-section"><div class="form-section-head"><h3>Суть задачи</h3><p>Короткое название и контекст проблемы.</p></div>
         <div class="field"><label for="title">Название</label><input id="title" name="title" minlength="5" maxlength="120" required value="${esc(task?.title || '')}" placeholder="Например, прототип умной урны" /></div>
         <div class="field"><label for="description">Зачем и что нужно сделать</label><textarea id="description" name="description" minlength="30" maxlength="5000" required placeholder="Опишите обычными словами: в чём проблема, для кого её решаем, что нужно сделать и какие есть ограничения">${esc(task?.description || '')}</textarea><small>Начните с цели — техническое ТЗ можно уточнить вместе с исполнителем.</small></div>
@@ -295,7 +296,7 @@ function taskFormPage(task = null) {
         <div class="field-row"><div class="field"><label for="category">Категория</label><select id="category" name="category" required><option value="">Выберите</option>${state.bootstrap.categories.map((item) => `<option ${task?.category === item ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></div><div class="field"><label for="skills">Компетенции</label><input id="skills" name="skills" maxlength="600" required value="${esc(task?.skills?.join(', ') || '')}" placeholder="ESP32, IoT, Sensors" /><small>От 1 до 12 навыков через запятую</small></div></div>
       </section>
       <section class="form-section"><div class="form-section-head"><h3>Условия</h3><p>Эти данные помогут получить предметные отклики.</p></div>
-        <div class="field-row"><div class="field"><label for="budget">Бюджет, ₽</label><input id="budget" name="budget" type="number" min="${MIN_PROJECT_PRICE}" max="${MAX_PROJECT_PRICE}" step="1000" required value="${task?.budget ?? ''}" placeholder="120000" /><small>От 1 000 до 100 млн ₽</small></div><div class="field"><label for="deadline">Срок результата</label><input id="deadline" name="deadline" type="date" min="${minDate}" max="${maxDate}" value="${esc(task?.deadline || '')}" required /><small>От завтра до двух лет вперёд</small></div></div>
+        <div class="field-row"><div class="field"><label for="budget">Бюджет, ₽</label><input id="budget" name="budget" type="number" min="${MIN_PROJECT_PRICE}" max="${MAX_PROJECT_PRICE}" step="1000" required value="${task?.budget ?? ''}" placeholder="120000" /><small>От 1 000 до 100 млн ₽</small></div><div class="field"><label for="deadline">Срок результата</label><input id="deadline" name="deadline" type="date" min="${minDate}" max="${maxDate}" value="${esc(task?.deadline || '')}" required /><small>Допустимый срок: с ${date(minDate)} по ${date(maxDate)}</small></div></div>
         <div class="field-row"><div class="field"><label for="location">Локация</label><input id="location" name="location" maxlength="100" required value="${esc(task?.location || 'Новосибирск')}" /></div><div class="field"><label for="format">Формат</label><select id="format" name="format" required>${state.bootstrap.formats.map((item) => `<option value="${item}" ${task?.format === item ? 'selected' : ''}>${formatLabels[item]}</option>`).join('')}</select></div></div>
         ${!editing || draft ? `<label class="checkbox"><input type="checkbox" name="publish" ${editing ? '' : 'checked'} /><span><strong>${editing ? 'Опубликовать после сохранения' : 'Сразу опубликовать'}</strong><br>${editing ? 'После проверки задача появится в каталоге.' : 'Снимите отметку, чтобы сохранить черновик.'}</span></label>` : ''}
       </section>
@@ -357,7 +358,7 @@ async function profilePage(id) {
     app.innerHTML = `<div class="page-shell narrow">${backControl('К задачам', '/tasks')}<div class="page-title-row"><div><p class="eyebrow">Профиль исполнителя</p><h1>${profile.completed ? 'Обновите профиль' : 'Расскажите, что умеете'}</h1><p class="lead">Конкретные навыки помогают задачам найти вас.</p></div></div>
       <form class="form-card" id="profile-form">
         <div class="field"><label for="bio">О себе</label><textarea id="bio" name="bio" minlength="20" maxlength="1000" required placeholder="Какую пользу вы приносите проектам?">${esc(profile.bio)}</textarea></div>
-        <div class="field"><label for="skills">Компетенции</label><input id="skills" name="skills" maxlength="600" value="${esc(profile.skills.join(', '))}" required placeholder="Python, ROS2, Computer Vision" /><small>От 1 до 12 конкретных навыков через запятую</small></div>
+        <div class="field"><label for="skills">Компетенции</label><input id="skills" name="skills" maxlength="600" value="${esc((Array.isArray(profile.skills) ? profile.skills : []).join(', '))}" required placeholder="Python, ROS2, Computer Vision" /><small>От 1 до 12 конкретных навыков через запятую</small></div>
         <div class="field"><label for="experience">Опыт</label><textarea id="experience" name="experience" minlength="20" maxlength="2000" required placeholder="Проекты, результаты, годы опыта">${esc(profile.experience)}</textarea></div>
         <div class="field"><label for="portfolio">Портфолио</label><input id="portfolio" name="portfolio" maxlength="500" value="${esc(profile.portfolio)}" placeholder="Ссылка или короткое описание" /></div>
         <div class="field-row"><div class="field"><label for="location">Локация</label><input id="location" name="location" maxlength="100" value="${esc(profile.location)}" required /></div><div class="field"><label for="workFormat">Формат работы</label><select id="workFormat" name="workFormat">${state.bootstrap.formats.map((item) => `<option value="${item}" ${profile.workFormat === item ? 'selected' : ''}>${formatLabels[item]}</option>`).join('')}</select></div></div>
@@ -544,6 +545,57 @@ function showFormError(form, message) {
   error.focus();
 }
 
+function showFieldError(field, message) {
+  const container = field.closest('.field');
+  if (!container) return showFormError(field.form, message);
+  container.querySelector('.field-error')?.remove();
+  const error = document.createElement('small');
+  error.className = 'field-error';
+  error.setAttribute('role', 'alert');
+  error.textContent = message;
+  container.append(error);
+}
+
+function updateDateValidity(input) {
+  input.setCustomValidity('');
+  let message = '';
+  if (input.validity.badInput) message = 'Укажите существующую дату в формате день, месяц и год.';
+  else if (input.value && !/^\d{4}-\d{2}-\d{2}$/.test(input.value)) message = 'Укажите существующую дату полностью.';
+  else if (input.validity.rangeUnderflow) message = `Дата не может быть раньше ${date(input.min)}.`;
+  else if (input.validity.rangeOverflow) message = `Дата не может быть позже ${date(input.max)}.`;
+  input.setCustomValidity(message);
+  return message;
+}
+
+function fieldValidationMessage(field) {
+  const label = field.labels?.[0]?.textContent?.trim() || 'Поле';
+  if (field.type === 'date') {
+    const dateMessage = updateDateValidity(field);
+    if (dateMessage) return `${label}: ${dateMessage}`;
+  }
+  if (field.validity.valueMissing) return `${label}: заполните поле.`;
+  if (field.validity.tooShort) return `${label}: нужно минимум ${field.minLength} символов.`;
+  if (field.validity.tooLong) return `${label}: допустимо не больше ${field.maxLength} символов.`;
+  if (field.validity.rangeUnderflow) return `${label}: значение должно быть не меньше ${Number(field.min).toLocaleString('ru-RU')}.`;
+  if (field.validity.rangeOverflow) return `${label}: значение должно быть не больше ${Number(field.max).toLocaleString('ru-RU')}.`;
+  if (field.validity.stepMismatch) return `${label}: используйте шаг ${Number(field.step).toLocaleString('ru-RU')}.`;
+  if (field.validity.typeMismatch) return `${label}: проверьте формат значения.`;
+  if (field.validity.badInput) return `${label}: проверьте введённое значение.`;
+  return `${label}: проверьте введённое значение.`;
+}
+
+function validateForm(form) {
+  form.querySelectorAll('[aria-invalid="true"]').forEach((field) => field.removeAttribute('aria-invalid'));
+  form.querySelectorAll('.field-error').forEach((error) => error.remove());
+  form.querySelectorAll('input[type="date"]').forEach(updateDateValidity);
+  const invalid = [...form.elements].find((field) => field.willValidate && !field.validity.valid);
+  if (!invalid) return true;
+  invalid.setAttribute('aria-invalid', 'true');
+  showFieldError(invalid, fieldValidationMessage(invalid));
+  invalid.focus();
+  return false;
+}
+
 document.addEventListener('click', async (event) => {
   const link = event.target.closest('[data-link]');
   if (link && link.origin === location.origin) { event.preventDefault(); navigate(link.pathname + link.search); return; }
@@ -569,7 +621,9 @@ document.addEventListener('click', async (event) => {
       actionBusy(actionEl);
       await api('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: actionEl.dataset.email, password: 'demo1234' }) });
       await refreshBootstrap();
-      const demoTarget = state.bootstrap.user.isAdmin ? '/admin' : state.bootstrap.user.primaryRole === 'EXECUTOR' ? '/tasks' : '/my-tasks';
+      const next = new URLSearchParams(location.search).get('next');
+      const safeNext = next?.startsWith('/') && !next.startsWith('//') ? next : null;
+      const demoTarget = safeNext || (state.bootstrap.user.isAdmin ? '/admin' : state.bootstrap.user.primaryRole === 'EXECUTOR' ? '/tasks' : '/my-tasks');
       navigate(demoTarget); toast('Демо-режим включён');
     } else if (action === 'clear-filters') navigate('/tasks');
     else if (action === 'open-application') applicationModal(JSON.parse(actionEl.dataset.task));
@@ -606,6 +660,7 @@ document.addEventListener('submit', async (event) => {
   const form = event.target;
   event.preventDefault();
   form.querySelector('.inline-error')?.remove();
+  if (!validateForm(form)) return;
   const data = formData(form);
   busy(form, true);
   try {
@@ -615,7 +670,7 @@ document.addEventListener('submit', async (event) => {
       await api('/api/auth/login', { method: 'POST', body: JSON.stringify(data) }); await refreshBootstrap();
       const next = new URLSearchParams(location.search).get('next');
       const defaultTarget = state.bootstrap.user.primaryRole === 'EXECUTOR' ? '/tasks' : '/my-tasks';
-      navigate(next?.startsWith('/') ? next : defaultTarget); toast('Вы вошли');
+      navigate(next?.startsWith('/') && !next.startsWith('//') ? next : defaultTarget); toast('Вы вошли');
     } else if (form.id === 'register-form') {
       await api('/api/auth/register', { method: 'POST', body: JSON.stringify(data) }); await refreshBootstrap();
       navigate(data.role === 'EXECUTOR' ? '/profile/me' : '/tasks/create'); toast('Аккаунт создан');
@@ -642,6 +697,14 @@ document.addEventListener('submit', async (event) => {
       await api(`/api/tasks/${form.dataset.taskId}/reviews`, { method: 'POST', body: JSON.stringify(data) }); toast('Отзыв опубликован'); render();
     }
   } catch (error) { toast(error.message, 'error'); showFormError(form, error.message); busy(form, false); }
+});
+
+document.addEventListener('input', (event) => {
+  const field = event.target;
+  if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement || field instanceof HTMLSelectElement)) return;
+  field.removeAttribute('aria-invalid');
+  field.closest('.field')?.querySelector('.field-error')?.remove();
+  if (field instanceof HTMLInputElement && field.type === 'date') updateDateValidity(field);
 });
 
 window.addEventListener('popstate', render);

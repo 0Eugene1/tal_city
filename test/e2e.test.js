@@ -8,7 +8,7 @@ const tempDir = mkdtempSync(join(tmpdir(), 'talent-city-'));
 process.env.TALENT_DB_PATH = join(tempDir, 'e2e.db');
 
 const { createServer } = await import('../src/server.js');
-const { db } = await import('../src/db.js');
+const { db, toJson } = await import('../src/db.js');
 const { calculateMatch } = await import('../src/matching.js');
 
 let server;
@@ -55,6 +55,7 @@ function futureDate(days) {
 }
 
 test('matching детерминирован и объясним', () => {
+  assert.deepEqual(toJson(null), []);
   assert.deepEqual(calculateMatch(['ROS2', 'Python', 'Computer Vision'], ['Python', 'ROS2', 'CV']), {
     score: 100,
     matchedSkills: ['ROS2', 'Python', 'Computer Vision'],
@@ -74,6 +75,9 @@ test('демо-данные показывают подбор, доверие, �
   await customer.request('/api/auth/login', { method: 'POST', body: {
     email: 'customer@demo.city', password: 'demo1234',
   }});
+  const emptyExecutorProfile = await customer.request('/api/profile/me');
+  assert.equal(emptyExecutorProfile.profile.id, 2);
+  assert.deepEqual(emptyExecutorProfile.profile.skills, []);
   const myTasks = await customer.request('/api/my-tasks');
   const smartTask = myTasks.created.find((task) => task.title === 'Автономная система контроля заполненности урн');
   assert.ok(smartTask);
@@ -217,6 +221,8 @@ test('даты, суммы, права и статусные переходы з
   };
 
   await assert.rejects(customer.request('/api/tasks', { method: 'POST', body: { ...baseTask, deadline: '1111-01-01' } }), /дата должна быть не раньше/);
+  await assert.rejects(customer.request('/api/tasks', { method: 'POST', body: { ...baseTask, deadline: '0000-01-01' } }), /такой даты не существует/);
+  await assert.rejects(customer.request('/api/tasks', { method: 'POST', body: { ...baseTask, deadline: '9999-12-31' } }), /дата должна быть не позже/);
   await assert.rejects(customer.request('/api/tasks', { method: 'POST', body: { ...baseTask, deadline: futureDate(-1) } }), /дата должна быть не раньше/);
   await assert.rejects(customer.request('/api/tasks', { method: 'POST', body: { ...baseTask, deadline: '2026-02-31' } }), /такой даты не существует/);
   await assert.rejects(customer.request('/api/tasks', { method: 'POST', body: { ...baseTask, deadline: futureDate(731) } }), /дата должна быть не позже/);
@@ -293,5 +299,9 @@ test('критичные клиентские маршруты и страниц
     assert.match(response.headers.get('content-type'), /text\/html/, path);
     assert.match(await response.text(), /id="app"/, path);
   }
+  const clientScript = await (await fetch(`${baseUrl}/app.js`)).text();
+  assert.match(clientScript, /id="task-form" novalidate/);
+  assert.match(clientScript, /Дата не может быть позже/);
+  assert.match(clientScript, /safeNext/);
   await assert.rejects(client().request('/api/tasks/999999999'), /Задача не найдена/);
 });

@@ -404,7 +404,7 @@ async function api(req, res, url) {
 
   if (method === 'GET' && path === '/api/profile/me') {
     const user = requireUser(req);
-    const row = db.prepare(`SELECT u.name, p.* FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = ?`).get(user.id);
+    const row = db.prepare(`SELECT u.id, u.name, p.* FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = ?`).get(user.id);
     return json(res, 200, { profile: parseProfile(row) });
   }
 
@@ -443,7 +443,7 @@ async function api(req, res, url) {
   let match = path.match(/^\/api\/profile\/(\d+)$/);
   if (method === 'GET' && match) {
     const profileId = Number(match[1]);
-    const row = db.prepare(`SELECT u.name, p.* FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = ?`).get(profileId);
+    const row = db.prepare(`SELECT u.id, u.name, p.* FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = ?`).get(profileId);
     if (!row) throw new ApiError(404, 'Профиль не найден');
     const reviews = db.prepare(`SELECT r.rating, r.text, r.created_at, u.name AS author_name, t.title AS task_title
       FROM reviews r JOIN users u ON u.id=r.author_id JOIN tasks t ON t.id=r.task_id
