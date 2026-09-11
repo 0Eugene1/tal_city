@@ -299,7 +299,9 @@ test('критичные клиентские маршруты и страниц
     assert.match(response.headers.get('content-type'), /text\/html/, path);
     assert.match(await response.text(), /id="app"/, path);
   }
-  const clientScript = await (await fetch(`${baseUrl}/app.js`)).text();
+  const clientScriptResponse = await fetch(`${baseUrl}/app.js`);
+  assert.equal(clientScriptResponse.headers.get('cache-control'), 'no-cache');
+  const clientScript = await clientScriptResponse.text();
   assert.match(clientScript, /id="task-form" novalidate/);
   assert.match(clientScript, /Дата не может быть позже/);
   assert.match(clientScript, /safeNext/);

@@ -786,7 +786,7 @@ async function staticFile(req, res, url) {
     const content = await readFile(filePath);
     res.writeHead(200, {
       'Content-Type': MIME[extname(filePath)] || 'application/octet-stream',
-      'Cache-Control': filePath.endsWith('index.html') ? 'no-cache' : 'public, max-age=3600',
+      'Cache-Control': 'no-cache',
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'DENY',
       'Referrer-Policy': 'strict-origin-when-cross-origin',
