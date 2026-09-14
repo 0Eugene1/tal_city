@@ -30,6 +30,16 @@ db.exec(`
     work_format TEXT NOT NULL DEFAULT 'REMOTE',
     availability TEXT NOT NULL DEFAULT '',
     desired_rate INTEGER,
+    organization_name TEXT NOT NULL DEFAULT '',
+    organization_role TEXT NOT NULL DEFAULT '',
+    contact TEXT NOT NULL DEFAULT '',
+    website TEXT NOT NULL DEFAULT '',
+    github TEXT NOT NULL DEFAULT '',
+    gitlab TEXT NOT NULL DEFAULT '',
+    linkedin TEXT NOT NULL DEFAULT '',
+    specialization TEXT NOT NULL DEFAULT '',
+    verification_status TEXT NOT NULL DEFAULT 'PROFILE_INCOMPLETE' CHECK (verification_status IN ('PROFILE_INCOMPLETE','PROFILE_COMPLETED','VERIFICATION_PENDING','VERIFIED','REJECTED')),
+    verification_reason TEXT NOT NULL DEFAULT '',
     completed_at TEXT,
     updated_at TEXT NOT NULL
   );
@@ -54,7 +64,9 @@ db.exec(`
     format TEXT NOT NULL CHECK (format IN ('REMOTE', 'ONSITE', 'HYBRID')),
     customer_id INTEGER NOT NULL REFERENCES users(id),
     assigned_executor_id INTEGER REFERENCES users(id),
-    status TEXT NOT NULL CHECK (status IN ('DRAFT','PUBLISHED','REVIEWING','ASSIGNED','IN_PROGRESS','SUBMITTED','ACCEPTED','REJECTED','CLOSED')),
+    status TEXT NOT NULL CHECK (status IN ('DRAFT','PENDING_MODERATION','PUBLISHED','REVIEWING','ASSIGNED','IN_PROGRESS','SUBMITTED','ACCEPTED','REJECTED','CLOSED')),
+    application_deadline TEXT,
+    moderation_reason TEXT NOT NULL DEFAULT '',
     is_hidden INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -116,12 +128,82 @@ db.exec(`
     created_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    task_id INTEGER REFERENCES tasks(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('TASK','RESUME')),
+    original_name TEXT NOT NULL,
+    mime_type TEXT NOT NULL,
+    size INTEGER NOT NULL CHECK (size >= 0),
+    content BLOB NOT NULL,
+    preview_text TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS application_comments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    application_id INTEGER NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    author_id INTEGER NOT NULL REFERENCES users(id),
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
   CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, is_hidden);
   CREATE INDEX IF NOT EXISTS idx_tasks_customer ON tasks(customer_id);
   CREATE INDEX IF NOT EXISTS idx_applications_task ON applications(task_id);
   CREATE INDEX IF NOT EXISTS idx_applications_executor ON applications(executor_id);
   CREATE INDEX IF NOT EXISTS idx_events_name ON analytics_events(name);
+  CREATE INDEX IF NOT EXISTS idx_attachments_task ON attachments(task_id);
+  CREATE INDEX IF NOT EXISTS idx_comments_application ON application_comments(application_id, id);
 `);
+
+function hasColumn(table, column) {
+  return db.prepare(`PRAGMA table_info(${table})`).all().some((item) => item.name === column);
+}
+
+// Lightweight forward migrations keep an existing pilot database usable.
+for (const [column, definition] of [
+  ['organization_name', "TEXT NOT NULL DEFAULT ''"], ['organization_role', "TEXT NOT NULL DEFAULT ''"],
+  ['contact', "TEXT NOT NULL DEFAULT ''"], ['website', "TEXT NOT NULL DEFAULT ''"],
+  ['github', "TEXT NOT NULL DEFAULT ''"], ['gitlab', "TEXT NOT NULL DEFAULT ''"],
+  ['linkedin', "TEXT NOT NULL DEFAULT ''"], ['specialization', "TEXT NOT NULL DEFAULT ''"],
+  ['verification_status', "TEXT NOT NULL DEFAULT 'PROFILE_INCOMPLETE'"],
+  ['verification_reason', "TEXT NOT NULL DEFAULT ''"],
+]) {
+  if (!hasColumn('profiles', column)) db.exec(`ALTER TABLE profiles ADD COLUMN ${column} ${definition}`);
+}
+
+if (!hasColumn('tasks', 'application_deadline')) {
+  db.exec("ALTER TABLE tasks ADD COLUMN application_deadline TEXT");
+  db.exec("UPDATE tasks SET application_deadline=deadline WHERE application_deadline IS NULL");
+}
+if (!hasColumn('tasks', 'moderation_reason')) db.exec("ALTER TABLE tasks ADD COLUMN moderation_reason TEXT NOT NULL DEFAULT ''");
+if (!hasColumn('attachments', 'preview_text')) db.exec("ALTER TABLE attachments ADD COLUMN preview_text TEXT NOT NULL DEFAULT ''");
+
+const tasksSql = db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='tasks'").get()?.sql || '';
+if (!tasksSql.includes('PENDING_MODERATION')) {
+  db.exec('PRAGMA foreign_keys = OFF');
+  db.exec(`
+    CREATE TABLE tasks_v2 (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, description TEXT NOT NULL,
+      expected_result TEXT NOT NULL DEFAULT '', category TEXT NOT NULL, skills TEXT NOT NULL DEFAULT '[]',
+      budget INTEGER NOT NULL CHECK (budget >= 0), deadline TEXT NOT NULL, location TEXT NOT NULL DEFAULT '',
+      format TEXT NOT NULL CHECK (format IN ('REMOTE','ONSITE','HYBRID')),
+      customer_id INTEGER NOT NULL REFERENCES users(id), assigned_executor_id INTEGER REFERENCES users(id),
+      status TEXT NOT NULL CHECK (status IN ('DRAFT','PENDING_MODERATION','PUBLISHED','REVIEWING','ASSIGNED','IN_PROGRESS','SUBMITTED','ACCEPTED','REJECTED','CLOSED')),
+      is_hidden INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, published_at TEXT,
+      application_deadline TEXT, moderation_reason TEXT NOT NULL DEFAULT ''
+    );
+    INSERT INTO tasks_v2 SELECT id,title,description,expected_result,category,skills,budget,deadline,location,format,
+      customer_id,assigned_executor_id,status,is_hidden,created_at,updated_at,published_at,application_deadline,moderation_reason FROM tasks;
+    DROP TABLE tasks;
+    ALTER TABLE tasks_v2 RENAME TO tasks;
+    CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, is_hidden);
+    CREATE INDEX IF NOT EXISTS idx_tasks_customer ON tasks(customer_id);
+  `);
+  db.exec('PRAGMA foreign_keys = ON');
+}
 
 export const now = () => new Date().toISOString();
 export const toJson = (value, fallback = []) => {
@@ -348,3 +430,104 @@ function normalizeDemoTaskOwnership() {
 }
 
 normalizeDemoTaskOwnership();
+
+function demoPdf() {
+  const lines = [
+    'Talent City / Smart Waste Monitoring',
+    'Technical brief for the pilot project',
+    'Scope: ESP32 telemetry, fill-level sensor, optional camera verification.',
+    'Deliverables: prototype, Python service, wiring diagram and launch guide.',
+  ];
+  const stream = `BT /F1 15 Tf 52 790 Td ${lines.map((line, index) => `${index ? '0 -28 Td ' : ''}(${line.replace(/[()\\]/g, '\\$&')}) Tj`).join(' ')} ET`;
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`,
+  ];
+  let document = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((object, index) => { offsets.push(Buffer.byteLength(document)); document += `${index + 1} 0 obj\n${object}\nendobj\n`; });
+  const xref = Buffer.byteLength(document);
+  document += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map((offset) => `${String(offset).padStart(10, '0')} 00000 n `).join('\n')}\n`;
+  document += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  return Buffer.from(document);
+}
+
+function normalizeTrustDemo() {
+  const timestamp = now();
+  const demoPassword = hashPassword('demo1234');
+  const extra = db.prepare("SELECT id FROM users WHERE email='museum@demo.city'").get()
+    || db.prepare(`INSERT INTO users (name,email,password_hash,primary_role,is_admin,created_at)
+      VALUES ('Музей науки и техники','museum@demo.city',?,'CUSTOMER',0,?)`).run(demoPassword, timestamp);
+  const extraId = Number(extra.id ?? extra.lastInsertRowid);
+  const customerProfiles = [
+    ['customer@demo.city', 'Центр городских проектов', 'Руководитель проектов', 'Новосибирск', 'Команда запускает полезные цифровые и инфраструктурные инициативы для города.', 'maria@demo.city', 'https://example.com/city-projects'],
+    ['projects@demo.city', 'Город талантов', 'Координатор проектного офиса', 'Новосибирск', 'Проектный офис соединяет городские команды и специалистов для решения прикладных задач.', 'projects@demo.city', 'https://example.com/talent-city'],
+  ];
+  for (const [email, organization, role, location, bio, contact, website] of customerProfiles) {
+    const user = db.prepare('SELECT id FROM users WHERE email=?').get(email);
+    if (!user) continue;
+    db.prepare(`INSERT INTO profiles (user_id,bio,location,organization_name,organization_role,contact,website,
+      verification_status,completed_at,updated_at) VALUES (?,?,?,?,?,?,?,'VERIFIED',?,?)
+      ON CONFLICT(user_id) DO UPDATE SET bio=excluded.bio,location=excluded.location,
+      organization_name=excluded.organization_name,organization_role=excluded.organization_role,
+      contact=excluded.contact,website=excluded.website,verification_status='VERIFIED',
+      completed_at=COALESCE(profiles.completed_at,excluded.completed_at),updated_at=excluded.updated_at`)
+      .run(user.id, bio, location, organization, role, contact, website, timestamp, timestamp);
+  }
+  db.prepare(`INSERT INTO profiles (user_id,bio,location,organization_name,organization_role,contact,website,
+    verification_status,completed_at,updated_at) VALUES (?,?,?,?,?,?,?,'VERIFIED',?,?)
+    ON CONFLICT(user_id) DO UPDATE SET verification_status='VERIFIED',completed_at=COALESCE(completed_at,excluded.completed_at)`)
+    .run(extraId, 'Музей создаёт интерактивные городские программы о науке и инженерии.', 'Новосибирск',
+      'Музей науки и техники', 'Продюсер выставочных проектов', 'museum@demo.city', 'https://example.com/museum', timestamp, timestamp);
+  db.prepare(`UPDATE profiles SET verification_status='VERIFIED', github=CASE WHEN github='' THEN 'https://github.com/example' ELSE github END,
+    specialization=CASE WHEN specialization='' THEN 'Прикладной специалист' ELSE specialization END
+    WHERE completed_at IS NOT NULL AND user_id IN (SELECT id FROM users WHERE primary_role='EXECUTOR')`).run();
+  db.prepare('UPDATE tasks SET application_deadline=COALESCE(application_deadline, deadline)').run();
+  db.prepare("UPDATE tasks SET status='PUBLISHED' WHERE status='REVIEWING' AND assigned_executor_id IS NULL").run();
+  const moderationCount = Number(db.prepare(`SELECT COUNT(*) AS n FROM tasks t JOIN users u ON u.id=t.customer_id
+    WHERE u.email='projects@demo.city' AND t.status IN ('PENDING_MODERATION','REJECTED')`).get().n);
+  if (!moderationCount) {
+    const moderationSamples = db.prepare(`SELECT t.id FROM tasks t JOIN users u ON u.id=t.customer_id
+      WHERE u.email='projects@demo.city' AND t.status='PUBLISHED' ORDER BY t.id LIMIT 2`).all();
+    if (moderationSamples[0]) db.prepare("UPDATE tasks SET status='PENDING_MODERATION',published_at=NULL WHERE id=?").run(moderationSamples[0].id);
+    if (moderationSamples[1]) db.prepare("UPDATE tasks SET status='REJECTED',is_hidden=1,published_at=NULL,moderation_reason='Уточните критерии готовности результата и права на исходные материалы.' WHERE id=?").run(moderationSamples[1].id);
+  }
+
+  const resumeCount = Number(db.prepare("SELECT COUNT(*) AS n FROM attachments WHERE kind='RESUME'").get().n);
+  if (!resumeCount) {
+    const executors = db.prepare("SELECT id,name FROM users WHERE primary_role='EXECUTOR' ORDER BY id LIMIT 3").all();
+    const insertResume = db.prepare(`INSERT INTO attachments (owner_id,task_id,kind,original_name,mime_type,size,content,created_at)
+      VALUES (?,NULL,'RESUME',?,'application/pdf',?,?,?)`);
+    for (const executor of executors) {
+      const content = Buffer.from(`%PDF-1.4\nDemo resume: ${executor.name}\n`);
+      insertResume.run(executor.id, `resume-${executor.id}.pdf`, content.length, content, timestamp);
+    }
+  }
+  const smart = db.prepare("SELECT id,customer_id FROM tasks WHERE title='Автономная система контроля заполненности урн'").get();
+  if (smart) {
+    const projectFiles = [
+      ['technical-brief.pdf', 'application/pdf', demoPdf(), 'Технический бриф пилота\n\nЦель: проверить автоматический контроль заполненности городских урн.\n\nСостав решения: ESP32, датчик расстояния, Python-сервис приёма телеметрии и дополнительная проверка камерой.\n\nРезультат: работающий прототип, схема подключения, исходный код и инструкция запуска.'],
+      ['integration-checklist.doc', 'application/msword', Buffer.from('{\\rtf1\\ansi\\deff0 {\\fonttbl {\\f0 Arial;}}\\f0\\fs24 Talent City - Integration checklist\\par 1. ESP32 telemetry endpoint\\par 2. Fill level calibration\\par 3. Camera verification sample\\par 4. Dashboard and launch guide\\par}'), 'Чек-лист интеграции\n\n1. Подключить ESP32 к тестовой сети.\n2. Откалибровать датчик заполненности на трёх уровнях.\n3. Передать телеметрию в Python API.\n4. Проверить выборку изображений с камеры.\n5. Зафиксировать инструкцию запуска и критерии приёмки.'],
+    ];
+    const insertProjectFile = db.prepare(`INSERT INTO attachments (owner_id,task_id,kind,original_name,mime_type,size,content,preview_text,created_at)
+      VALUES (?,?,'TASK',?,?,?,?,?,?)`);
+    for (const [name, mime, content, preview] of projectFiles) {
+      const existing = db.prepare("SELECT id FROM attachments WHERE task_id=? AND original_name=?").get(smart.id, name);
+      if (existing) db.prepare('UPDATE attachments SET mime_type=?,size=?,content=?,preview_text=? WHERE id=?').run(mime, content.length, content, preview, existing.id);
+      else insertProjectFile.run(smart.customer_id, smart.id, name, mime, content.length, content, preview, timestamp);
+    }
+  }
+  if (smart && !db.prepare(`SELECT 1 FROM application_comments c JOIN applications a ON a.id=c.application_id WHERE a.task_id=?`).get(smart.id)) {
+    const application = db.prepare('SELECT id,executor_id FROM applications WHERE task_id=? ORDER BY id LIMIT 1').get(smart.id);
+    if (application) {
+      const insertComment = db.prepare('INSERT INTO application_comments (application_id,author_id,text,created_at) VALUES (?,?,?,?)');
+      insertComment.run(application.id, smart.customer_id, 'Подскажите, какие датчики вы предлагаете использовать в первом прототипе?', timestamp);
+      insertComment.run(application.id, application.executor_id, 'Начну с ультразвукового датчика, затем сравню его показания с камерой на тестовой выборке.', timestamp);
+    }
+  }
+}
+
+normalizeTrustDemo();

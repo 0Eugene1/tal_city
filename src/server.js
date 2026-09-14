@@ -19,14 +19,20 @@ const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const PUBLIC_DIR = join(ROOT, 'public');
 const CATEGORIES = ['IT', 'AI', 'Дизайн', 'Маркетинг', 'Инженерия', 'Робототехника', 'Исследования', 'Мероприятия', 'Контент', 'Другое'];
 const FORMATS = ['REMOTE', 'HYBRID', 'ONSITE'];
-const TASK_STATUSES = ['DRAFT', 'PUBLISHED', 'REVIEWING', 'ASSIGNED', 'IN_PROGRESS', 'SUBMITTED', 'ACCEPTED', 'REJECTED', 'CLOSED'];
-const PUBLIC_TASK_STATUSES = ['PUBLISHED', 'REVIEWING'];
+const TASK_STATUSES = ['DRAFT', 'PENDING_MODERATION', 'PUBLISHED', 'REVIEWING', 'ASSIGNED', 'IN_PROGRESS', 'SUBMITTED', 'ACCEPTED', 'REJECTED', 'CLOSED'];
+const PUBLIC_TASK_STATUSES = ['PUBLISHED'];
 const MIN_PROJECT_PRICE = 1_000;
 const MAX_PROJECT_PRICE = 100_000_000;
 const MIN_HOURLY_RATE = 100;
 const MAX_HOURLY_RATE = 100_000;
 const MAX_TASK_HORIZON_DAYS = 730;
 const RELEVANT_MATCH_SCORE = 50;
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
+const ALLOWED_FILES = new Map([
+  ['application/pdf', '.pdf'], ['application/msword', '.doc'],
+  ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.docx'],
+  ['image/jpeg', '.jpg'], ['image/png', '.png'], ['image/webp', '.webp'],
+]);
 
 class ApiError extends Error {
   constructor(status, message, details = undefined) {
@@ -49,7 +55,7 @@ async function readJson(req) {
   let raw = '';
   for await (const chunk of req) {
     raw += chunk;
-    if (raw.length > 1_000_000) throw new ApiError(413, 'Слишком большой запрос');
+    if (raw.length > 15_000_000) throw new ApiError(413, 'Слишком большой запрос');
   }
   if (!raw) return {};
   try { return JSON.parse(raw); } catch { throw new ApiError(400, 'Некорректный JSON'); }
@@ -117,6 +123,26 @@ function list(value, label = 'Навыки') {
   return clean;
 }
 
+function validateUpload(body, { resume = false } = {}) {
+  const originalName = text(body.name, { required: true, max: 180, label: 'Имя файла' }).replace(/[\\/\r\n]/g, '_');
+  const mimeType = text(body.mimeType, { required: true, max: 120, label: 'Тип файла' }).toLowerCase();
+  const expectedExtension = ALLOWED_FILES.get(mimeType);
+  if (!expectedExtension || (resume && mimeType.startsWith('image/'))) throw new ApiError(422, 'Недопустимый тип файла');
+  if (extname(originalName).toLowerCase() !== expectedExtension && !(mimeType === 'image/jpeg' && ['.jpeg', '.jpg'].includes(extname(originalName).toLowerCase()))) {
+    throw new ApiError(422, 'Расширение файла не соответствует его типу');
+  }
+  const encoded = text(body.data, { required: true, max: Math.ceil(MAX_FILE_SIZE * 4 / 3) + 16, label: 'Файл' });
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) throw new ApiError(422, 'Некорректное содержимое файла');
+  const content = Buffer.from(encoded, 'base64');
+  if (!content.length || content.length > MAX_FILE_SIZE) throw new ApiError(413, 'Файл превышает лимит 10 МБ');
+  return { originalName, mimeType, content };
+}
+
+function attachmentMeta(row) {
+  return { id: Number(row.id), name: row.original_name, mimeType: row.mime_type, size: Number(row.size), createdAt: row.created_at,
+    previewText: row.preview_text || '', url: `/api/attachments/${row.id}`, previewUrl: `/api/attachments/${row.id}?preview=1` };
+}
+
 function parseTask(row) {
   if (!row) return null;
   return {
@@ -128,6 +154,9 @@ function parseTask(row) {
     skills: toJson(row.skills),
     budget: Number(row.budget),
     deadline: row.deadline,
+    applicationDeadline: row.application_deadline || row.deadline,
+    applicationOpen: row.status === 'PUBLISHED' && (row.application_deadline || row.deadline) >= localDateString(),
+    moderationReason: row.moderation_reason || '',
     location: row.location,
     format: row.format,
     customerId: Number(row.customer_id),
@@ -144,6 +173,11 @@ function parseTask(row) {
       memberSince: row.customer_created_at || undefined,
       publishedTasks: row.customer_published_tasks === undefined ? undefined : Number(row.customer_published_tasks),
       completedTasks: row.customer_completed_tasks === undefined ? undefined : Number(row.customer_completed_tasks),
+      organizationName: row.customer_organization_name || '',
+      organizationRole: row.customer_organization_role || '',
+      location: row.customer_location || '',
+      bio: row.customer_bio || '', website: row.customer_website || '',
+      verified: row.customer_verification_status === 'VERIFIED',
     } : undefined,
     applicationCount: row.application_count === undefined ? undefined : Number(row.application_count),
   };
@@ -162,6 +196,12 @@ function parseProfile(row) {
     workFormat: row.work_format || 'REMOTE',
     availability: row.availability || '',
     desiredRate: row.desired_rate === null || row.desired_rate === undefined ? null : Number(row.desired_rate),
+    organizationName: row.organization_name || '',
+    organizationRole: row.organization_role || '',
+    contact: row.contact || '', website: row.website || '', github: row.github || '',
+    gitlab: row.gitlab || '', linkedin: row.linkedin || '', specialization: row.specialization || '',
+    verificationStatus: row.verification_status || 'PROFILE_INCOMPLETE',
+    verificationReason: row.verification_reason || '',
     completed: Boolean(row.completed_at),
     completedAt: row.completed_at || null,
   };
@@ -188,6 +228,7 @@ function parseApplication(row, taskSkills = null) {
       location: row.profile_location || '',
       workFormat: row.work_format || '',
       desiredRate: row.desired_rate === null ? null : Number(row.desired_rate),
+      verificationStatus: row.executor_verification_status || row.verification_status || 'PROFILE_INCOMPLETE',
     };
     if (taskSkills) result.match = calculateMatch(taskSkills, result.executor.skills);
   }
@@ -198,7 +239,7 @@ function sessionUser(req) {
   const token = readCookies(req.headers.cookie).talent_session;
   if (!token) return null;
   const row = db.prepare(`SELECT u.id, u.name, u.email, u.primary_role, u.is_admin,
-      p.completed_at, p.skills, p.location, p.work_format
+      p.completed_at, p.skills, p.location, p.work_format, p.verification_status
     FROM sessions s JOIN users u ON u.id = s.user_id
     LEFT JOIN profiles p ON p.user_id = u.id
     WHERE s.token_hash = ? AND s.expires_at > ?`).get(hashToken(token), now());
@@ -207,6 +248,7 @@ function sessionUser(req) {
     id: Number(row.id), name: row.name, email: row.email,
     primaryRole: row.primary_role, isAdmin: Boolean(row.is_admin),
     profileCompleted: Boolean(row.completed_at), skills: toJson(row.skills),
+    verificationStatus: row.verification_status || 'PROFILE_INCOMPLETE',
     location: row.location || '', workFormat: row.work_format || 'REMOTE',
   };
 }
@@ -245,10 +287,13 @@ function setSession(res, userId, req) {
 
 function getTask(id) {
   return db.prepare(`SELECT t.*, u.name AS customer_name, u.created_at AS customer_created_at,
+      cp.organization_name AS customer_organization_name, cp.organization_role AS customer_organization_role,
+      cp.location AS customer_location, cp.bio AS customer_bio, cp.website AS customer_website,
+      cp.verification_status AS customer_verification_status,
       (SELECT COUNT(*) FROM applications a WHERE a.task_id = t.id AND a.status != 'WITHDRAWN') AS application_count,
       (SELECT COUNT(*) FROM tasks own WHERE own.customer_id=t.customer_id AND own.published_at IS NOT NULL) AS customer_published_tasks,
       (SELECT COUNT(*) FROM tasks own WHERE own.customer_id=t.customer_id AND own.status='CLOSED') AS customer_completed_tasks
-    FROM tasks t JOIN users u ON u.id = t.customer_id WHERE t.id = ?`).get(id);
+    FROM tasks t JOIN users u ON u.id = t.customer_id LEFT JOIN profiles cp ON cp.user_id=u.id WHERE t.id = ?`).get(id);
 }
 
 function productMetrics({ demoOnly = false } = {}) {
@@ -309,6 +354,7 @@ function validateTask(body) {
   if (!CATEGORIES.includes(category)) throw new ApiError(422, 'Выберите категорию из списка');
   if (!FORMATS.includes(format)) throw new ApiError(422, 'Выберите формат работы');
   const deadline = validDateOnly(body.deadline, 'Срок', { min: dateWithOffset(1), max: dateWithOffset(MAX_TASK_HORIZON_DAYS) });
+  const applicationDeadline = validDateOnly(body.applicationDeadline || deadline, 'Приём заявок', { min: localDateString(), max: deadline });
   const skills = list(body.skills);
   if (!skills.length) throw new ApiError(422, 'Компетенции: добавьте хотя бы один навык');
   return {
@@ -319,6 +365,7 @@ function validateTask(body) {
     skills,
     budget: integerInRange(body.budget, 'Бюджет', { min: MIN_PROJECT_PRICE, max: MAX_PROJECT_PRICE }),
     deadline,
+    applicationDeadline,
     location: text(body.location, { required: true, max: 100, label: 'Локация' }),
     format,
   };
@@ -372,8 +419,8 @@ async function api(req, res, url) {
   if (method === 'GET' && path === '/api/bootstrap') {
     const user = sessionUser(req);
     const stats = db.prepare(`SELECT
-      (SELECT COUNT(*) FROM tasks WHERE status IN ('PUBLISHED','REVIEWING') AND is_hidden = 0 AND deadline >= ?) AS tasks,
-      (SELECT COUNT(*) FROM profiles WHERE completed_at IS NOT NULL) AS executors,
+      (SELECT COUNT(*) FROM tasks WHERE status='PUBLISHED' AND is_hidden = 0 AND deadline >= ?) AS tasks,
+      (SELECT COUNT(*) FROM profiles p JOIN users u ON u.id=p.user_id WHERE u.primary_role='EXECUTOR' AND p.verification_status='VERIFIED') AS executors,
       (SELECT COUNT(*) FROM assignments) AS assignments`).get(localDateString());
     return json(res, 200, { user, categories: CATEGORIES, formats: FORMATS, stats });
   }
@@ -416,47 +463,109 @@ async function api(req, res, url) {
   }
 
   if (method === 'GET' && path === '/api/profile/me') {
-    const user = requireExecutor(req);
-    const row = db.prepare(`SELECT u.id, u.name, p.* FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = ?`).get(user.id);
-    return json(res, 200, { profile: parseProfile(row) });
+    const user = requireUser(req);
+    const row = db.prepare(`SELECT u.id, u.name, u.primary_role, p.* FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = ?`).get(user.id);
+    const resume = db.prepare("SELECT id,original_name,mime_type,size,preview_text,created_at FROM attachments WHERE owner_id=? AND kind='RESUME' ORDER BY id DESC LIMIT 1").get(user.id);
+    return json(res, 200, { profile: parseProfile(row), role: user.primaryRole, resume: resume || null });
   }
 
   if (method === 'PUT' && path === '/api/profile/me') {
-    const user = requireExecutor(req);
+    const user = requireUser(req);
+    if (user.isAdmin) throw new ApiError(403, 'Профиль модератора не участвует в бирже');
     const body = await readJson(req);
-    const profile = {
+    const customer = user.primaryRole === 'CUSTOMER';
+    const profile = customer ? {
+      bio: text(body.bio, { required: true, min: 20, max: 1000, label: 'Описание организации' }),
+      skills: [], experience: '', portfolio: '',
+      location: text(body.location, { required: true, max: 100, label: 'Город' }), workFormat: 'REMOTE', availability: '', desiredRate: null,
+      organizationName: text(body.organizationName, { required: true, min: 2, max: 160, label: 'Организация' }),
+      organizationRole: text(body.organizationRole, { required: true, min: 2, max: 120, label: 'Роль' }),
+      contact: text(body.contact, { required: true, min: 3, max: 200, label: 'Рабочий контакт' }),
+      website: optionalHttpUrl(body.website, 'Сайт'), github: '', gitlab: '', linkedin: '', specialization: '',
+    } : {
       bio: text(body.bio, { required: true, min: 20, max: 1000, label: 'О себе' }),
-      skills: list(body.skills),
-      experience: text(body.experience, { required: true, min: 20, max: 2000, label: 'Опыт' }),
-      portfolio: text(body.portfolio, { max: 500, label: 'Портфолио' }),
-      location: text(body.location, { required: true, max: 100, label: 'Локация' }),
+      skills: list(body.skills), experience: text(body.experience, { required: true, min: 20, max: 2000, label: 'Опыт' }),
+      portfolio: text(body.portfolio, { max: 500, label: 'Портфолио' }), location: text(body.location, { required: true, max: 100, label: 'Локация' }),
       workFormat: FORMATS.includes(body.workFormat) ? body.workFormat : null,
       availability: text(body.availability, { required: true, max: 200, label: 'Доступность' }),
-      desiredRate: body.desiredRate === '' || body.desiredRate === null
-        ? null
-        : integerInRange(body.desiredRate, 'Ставка', { min: MIN_HOURLY_RATE, max: MAX_HOURLY_RATE }),
+      desiredRate: body.desiredRate === '' || body.desiredRate === null ? null : integerInRange(body.desiredRate, 'Ставка', { min: MIN_HOURLY_RATE, max: MAX_HOURLY_RATE }),
+      organizationName: '', organizationRole: '', contact: '', website: optionalHttpUrl(body.website, 'Сайт'),
+      github: optionalHttpUrl(body.github, 'GitHub'), gitlab: optionalHttpUrl(body.gitlab, 'GitLab'),
+      linkedin: optionalHttpUrl(body.linkedin, 'LinkedIn'), specialization: text(body.specialization || list(body.skills)[0], { required: true, min: 2, max: 120, label: 'Специализация' }),
     };
-    if (!profile.skills.length) throw new ApiError(422, 'Добавьте хотя бы один навык');
-    if (!profile.workFormat) throw new ApiError(422, 'Выберите формат работы');
+    if (!customer && !profile.skills.length) throw new ApiError(422, 'Добавьте хотя бы один навык');
+    if (!customer && !profile.workFormat) throw new ApiError(422, 'Выберите формат работы');
     const existed = db.prepare('SELECT completed_at FROM profiles WHERE user_id = ?').get(user.id);
     const timestamp = now();
     db.prepare(`INSERT INTO profiles
-      (user_id, bio, skills, experience, portfolio, location, work_format, availability, desired_rate, completed_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (user_id,bio,skills,experience,portfolio,location,work_format,availability,desired_rate,organization_name,organization_role,contact,website,github,gitlab,linkedin,specialization,verification_status,completed_at,updated_at)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'PROFILE_COMPLETED',?,?)
       ON CONFLICT(user_id) DO UPDATE SET bio=excluded.bio, skills=excluded.skills, experience=excluded.experience,
       portfolio=excluded.portfolio, location=excluded.location, work_format=excluded.work_format,
-      availability=excluded.availability, desired_rate=excluded.desired_rate,
-      completed_at=COALESCE(profiles.completed_at, excluded.completed_at), updated_at=excluded.updated_at`)
+      availability=excluded.availability,desired_rate=excluded.desired_rate,organization_name=excluded.organization_name,
+      organization_role=excluded.organization_role,contact=excluded.contact,website=excluded.website,github=excluded.github,
+      gitlab=excluded.gitlab,linkedin=excluded.linkedin,specialization=excluded.specialization,
+      verification_status=CASE WHEN profiles.verification_status='VERIFIED' THEN 'VERIFIED' ELSE 'PROFILE_COMPLETED' END,
+      verification_reason='',completed_at=COALESCE(profiles.completed_at,excluded.completed_at),updated_at=excluded.updated_at`)
       .run(user.id, profile.bio, JSON.stringify(profile.skills), profile.experience, profile.portfolio,
-        profile.location, profile.workFormat, profile.availability, profile.desiredRate, timestamp, timestamp);
-    if (!existed?.completed_at) track('profile_completed', { userId: user.id });
+        profile.location, profile.workFormat, profile.availability, profile.desiredRate, profile.organizationName,
+        profile.organizationRole, profile.contact, profile.website, profile.github, profile.gitlab, profile.linkedin,
+        profile.specialization, timestamp, timestamp);
+    if (!existed?.completed_at) track(customer ? 'customer_profile_completed' : 'executor_profile_completed', { userId: user.id });
+    return json(res, 200, { ok: true });
+  }
+
+  if (method === 'POST' && path === '/api/profile/me/submit-verification') {
+    const user = requireUser(req);
+    const profile = db.prepare('SELECT * FROM profiles WHERE user_id=?').get(user.id);
+    if (!profile?.completed_at) throw new ApiError(409, 'Сначала заполните обязательные поля профиля');
+    if (profile.verification_status === 'VERIFIED') throw new ApiError(409, 'Профиль уже подтверждён');
+    db.prepare("UPDATE profiles SET verification_status='VERIFICATION_PENDING',verification_reason='',updated_at=? WHERE user_id=?").run(now(), user.id);
+    track(user.primaryRole === 'CUSTOMER' ? 'customer_verification_submitted' : 'executor_verification_submitted', { userId: user.id });
+    return json(res, 200, { ok: true, status: 'VERIFICATION_PENDING' });
+  }
+
+  if (method === 'POST' && path === '/api/profile/me/resume') {
+    const user = requireExecutor(req);
+    const file = validateUpload(await readJson(req), { resume: true });
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare("DELETE FROM attachments WHERE owner_id=? AND kind='RESUME'").run(user.id);
+      const result = db.prepare(`INSERT INTO attachments (owner_id,task_id,kind,original_name,mime_type,size,content,created_at)
+        VALUES (?,NULL,'RESUME',?,?,?,?,?)`).run(user.id, file.originalName, file.mimeType, file.content.length, file.content, now());
+      db.exec('COMMIT');
+      return json(res, 201, { attachment: attachmentMeta({ id: result.lastInsertRowid, original_name: file.originalName, mime_type: file.mimeType, size: file.content.length, created_at: now() }) });
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
+  }
+
+  let attachmentMatch = path.match(/^\/api\/attachments\/(\d+)$/);
+  if (method === 'GET' && attachmentMatch) {
+    const user = requireUser(req);
+    const file = db.prepare('SELECT a.*,t.customer_id,t.status AS task_status,t.assigned_executor_id FROM attachments a LEFT JOIN tasks t ON t.id=a.task_id WHERE a.id=?').get(Number(attachmentMatch[1]));
+    if (!file) throw new ApiError(404, 'Вложение не найдено');
+    const applicant = file.task_id && db.prepare('SELECT 1 FROM applications WHERE task_id=? AND executor_id=?').get(file.task_id, user.id);
+    const resumeCustomer = file.kind === 'RESUME' && db.prepare(`SELECT 1 FROM applications a JOIN tasks t ON t.id=a.task_id
+      WHERE a.executor_id=? AND t.customer_id=? LIMIT 1`).get(file.owner_id, user.id);
+    const allowed = user.isAdmin || Number(file.owner_id) === user.id || resumeCustomer || (file.task_id && (file.task_status === 'PUBLISHED' || Number(file.customer_id) === user.id || Number(file.assigned_executor_id) === user.id || applicant));
+    if (!allowed) throw new ApiError(403, 'Нет доступа к вложению');
+    const inline = url.searchParams.get('preview') === '1' && (file.mime_type === 'application/pdf' || file.mime_type.startsWith('image/'));
+    res.writeHead(200, { 'Content-Type': file.mime_type, 'Content-Length': file.size, 'Content-Disposition': `${inline ? 'inline' : 'attachment'}; filename*=UTF-8''${encodeURIComponent(file.original_name)}`, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, no-store' });
+    return res.end(file.content);
+  }
+
+  if (method === 'DELETE' && attachmentMatch) {
+    const user = requireUser(req);
+    const file = db.prepare('SELECT * FROM attachments WHERE id=?').get(Number(attachmentMatch[1]));
+    if (!file) throw new ApiError(404, 'Вложение не найдено');
+    if (!user.isAdmin && Number(file.owner_id) !== user.id) throw new ApiError(403, 'Удалить вложение может только владелец');
+    db.prepare('DELETE FROM attachments WHERE id=?').run(file.id);
     return json(res, 200, { ok: true });
   }
 
   let match = path.match(/^\/api\/profile\/(\d+)$/);
   if (method === 'GET' && match) {
     const profileId = Number(match[1]);
-    const row = db.prepare(`SELECT u.id, u.name, p.* FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = ?`).get(profileId);
+    const row = db.prepare(`SELECT u.id, u.name, u.primary_role, u.created_at AS member_since, p.* FROM users u LEFT JOIN profiles p ON p.user_id = u.id WHERE u.id = ?`).get(profileId);
     if (!row) throw new ApiError(404, 'Профиль не найден');
     const reviews = db.prepare(`SELECT r.rating, r.text, r.created_at, u.name AS author_name, t.title AS task_title
       FROM reviews r JOIN users u ON u.id=r.author_id JOIN tasks t ON t.id=r.task_id
@@ -474,12 +583,19 @@ async function api(req, res, url) {
       reviewsCount: Number(rating.reviews_count || 0),
       averageRating: rating.average_rating === null ? null : Math.round(Number(rating.average_rating) * 10) / 10,
     };
-    return json(res, 200, { profile: parseProfile(row), reviews, stats });
+    if (row.primary_role === 'CUSTOMER') {
+      const customerActivity = db.prepare(`SELECT COUNT(*) AS published_tasks,
+        SUM(CASE WHEN status='CLOSED' THEN 1 ELSE 0 END) AS completed_tasks FROM tasks WHERE customer_id=? AND published_at IS NOT NULL`).get(profileId);
+      stats.publishedTasks = Number(customerActivity.published_tasks || 0);
+      stats.completedTasks = Number(customerActivity.completed_tasks || 0);
+    }
+    const resumeRow = db.prepare("SELECT id,original_name,mime_type,size,preview_text,created_at FROM attachments WHERE owner_id=? AND kind='RESUME' ORDER BY id DESC LIMIT 1").get(profileId);
+    return json(res, 200, { profile: { ...parseProfile(row), role: row.primary_role, memberSince: row.member_since }, reviews, stats, resume: resumeRow ? attachmentMeta(resumeRow) : null });
   }
 
   if (method === 'GET' && path === '/api/tasks') {
     const user = sessionUser(req);
-    const where = [`t.status IN ('PUBLISHED','REVIEWING')`, 't.is_hidden = 0', 't.deadline >= ?'];
+    const where = [`t.status='PUBLISHED'`, 't.is_hidden = 0', 't.deadline >= ?'];
     const params = [localDateString()];
     if (url.searchParams.get('q')) {
       where.push('(t.title LIKE ? OR t.description LIKE ? OR t.skills LIKE ?)');
@@ -506,18 +622,32 @@ async function api(req, res, url) {
     const user = requireCustomer(req);
     const body = await readJson(req);
     const task = validateTask(body);
-    const status = body.publish ? 'PUBLISHED' : 'DRAFT';
+    const status = 'DRAFT';
     const timestamp = now();
     const result = db.prepare(`INSERT INTO tasks
-      (title, description, expected_result, category, skills, budget, deadline, location, format, customer_id, status, created_at, updated_at, published_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      (title, description, expected_result, category, skills, budget, deadline, application_deadline, location, format, customer_id, status, created_at, updated_at, published_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(task.title, task.description, task.expectedResult, task.category, JSON.stringify(task.skills), task.budget,
-        task.deadline, task.location, task.format, user.id, status, timestamp, timestamp, status === 'PUBLISHED' ? timestamp : null);
+        task.deadline, task.applicationDeadline, task.location, task.format, user.id, status, timestamp, timestamp, null);
     const taskId = Number(result.lastInsertRowid);
     recordHistory(taskId, user.id, status, status === 'PUBLISHED' ? 'Задача опубликована' : 'Создан черновик');
     track('task_created', { userId: user.id, taskId });
-    if (status === 'PUBLISHED') track('task_published', { userId: user.id, taskId });
     return json(res, 201, { taskId, status });
+  }
+
+  let taskAttachmentMatch = path.match(/^\/api\/tasks\/(\d+)\/attachments$/);
+  if (method === 'POST' && taskAttachmentMatch) {
+    const user = requireCustomer(req);
+    const taskId = Number(taskAttachmentMatch[1]);
+    const task = getTask(taskId);
+    if (!task) throw new ApiError(404, 'Задача не найдена');
+    if (Number(task.customer_id) !== user.id) throw new ApiError(403, 'Добавлять материалы может только заказчик задачи');
+    if (!['DRAFT', 'REJECTED'].includes(task.status)) throw new ApiError(409, 'Материалы можно менять до отправки на модерацию');
+    const file = validateUpload(await readJson(req));
+    const result = db.prepare(`INSERT INTO attachments (owner_id,task_id,kind,original_name,mime_type,size,content,created_at)
+      VALUES (?,?,'TASK',?,?,?,?,?)`).run(user.id, taskId, file.originalName, file.mimeType, file.content.length, file.content, now());
+    track('task_attachment_uploaded', { userId: user.id, taskId, metadata: { attachmentId: Number(result.lastInsertRowid), mimeType: file.mimeType, size: file.content.length } });
+    return json(res, 201, { attachment: attachmentMeta({ id: result.lastInsertRowid, original_name: file.originalName, mime_type: file.mimeType, size: file.content.length, created_at: now() }) });
   }
 
   match = path.match(/^\/api\/tasks\/(\d+)$/);
@@ -529,7 +659,8 @@ async function api(req, res, url) {
     const task = parseTask(row);
     if (user?.profileCompleted) task.match = calculateMatch(task.skills, user.skills);
     if (!user || (user.id !== task.customerId && !user.isAdmin)) track('task_viewed', { userId: user?.id, taskId });
-    const response = { task };
+    const attachmentRows = db.prepare("SELECT id,original_name,mime_type,size,preview_text,created_at FROM attachments WHERE task_id=? AND kind='TASK' ORDER BY id").all(taskId);
+    const response = { task, attachments: attachmentRows.map(attachmentMeta) };
     const isOwner = user && (user.id === task.customerId || user.isAdmin);
     if (user && !isOwner) {
       const myApplication = db.prepare('SELECT * FROM applications WHERE task_id=? AND executor_id=?').get(taskId, user.id);
@@ -537,7 +668,7 @@ async function api(req, res, url) {
     }
     if (isOwner) {
       const appRows = db.prepare(`SELECT a.*, u.name AS executor_name, p.bio, p.skills AS profile_skills,
-        p.experience, p.location AS profile_location, p.work_format, p.desired_rate
+        p.experience, p.location AS profile_location, p.work_format, p.desired_rate, p.verification_status AS executor_verification_status
         FROM applications a JOIN users u ON u.id=a.executor_id LEFT JOIN profiles p ON p.user_id=u.id
         WHERE a.task_id=? ORDER BY a.created_at DESC`).all(taskId);
       response.applications = appRows.map((app) => parseApplication(app, task.skills)).sort((a, b) => b.match.score - a.match.score);
@@ -557,16 +688,16 @@ async function api(req, res, url) {
     const row = getTask(taskId);
     if (!row) throw new ApiError(404, 'Задача не найдена');
     if (user.id !== Number(row.customer_id)) throw new ApiError(403, 'Редактировать может только заказчик задачи');
-    if (!['DRAFT', 'PUBLISHED', 'REVIEWING'].includes(row.status)) throw new ApiError(409, 'Назначенную задачу уже нельзя редактировать');
+    if (!['DRAFT', 'REJECTED'].includes(row.status)) throw new ApiError(409, 'На модерации и после публикации условия задачи менять нельзя');
     const task = validateTask(await readJson(req));
     const latestOffer = db.prepare(`SELECT MAX(proposed_deadline) AS deadline FROM applications
       WHERE task_id=? AND status IN ('SUBMITTED','SHORTLISTED')`).get(taskId).deadline;
     if (latestOffer && task.deadline < latestOffer) {
       throw new ApiError(409, `Срок задачи не может быть раньше уже предложенного срока ${latestOffer}`);
     }
-    db.prepare(`UPDATE tasks SET title=?,description=?,expected_result=?,category=?,skills=?,budget=?,deadline=?,location=?,format=?,updated_at=? WHERE id=?`)
+    db.prepare(`UPDATE tasks SET title=?,description=?,expected_result=?,category=?,skills=?,budget=?,deadline=?,application_deadline=?,location=?,format=?,status='DRAFT',moderation_reason='',updated_at=? WHERE id=?`)
       .run(task.title, task.description, task.expectedResult, task.category, JSON.stringify(task.skills), task.budget,
-        task.deadline, task.location, task.format, now(), taskId);
+        task.deadline, task.applicationDeadline, task.location, task.format, now(), taskId);
     return json(res, 200, { ok: true });
   }
 
@@ -577,12 +708,13 @@ async function api(req, res, url) {
     const row = getTask(taskId);
     if (!row) throw new ApiError(404, 'Задача не найдена');
     if (user.id !== Number(row.customer_id)) throw new ApiError(403, 'Публиковать может только заказчик задачи');
-    if (row.status !== 'DRAFT') throw new ApiError(409, 'Задача уже опубликована');
+    if (!['DRAFT', 'REJECTED'].includes(row.status)) throw new ApiError(409, 'Задача уже отправлена на модерацию');
+    if (user.verificationStatus !== 'VERIFIED') throw new ApiError(409, 'Отправить задачу можно после подтверждения профиля заказчика');
     const timestamp = now();
-    db.prepare(`UPDATE tasks SET status='PUBLISHED', published_at=?, updated_at=? WHERE id=?`).run(timestamp, timestamp, taskId);
-    recordHistory(taskId, user.id, 'PUBLISHED', 'Задача опубликована');
-    track('task_published', { userId: user.id, taskId });
-    return json(res, 200, { ok: true });
+    db.prepare(`UPDATE tasks SET status='PENDING_MODERATION',moderation_reason='',updated_at=? WHERE id=?`).run(timestamp, taskId);
+    recordHistory(taskId, user.id, 'PENDING_MODERATION', 'Задача отправлена на модерацию');
+    track('task_submitted_for_moderation', { userId: user.id, taskId });
+    return json(res, 200, { ok: true, status: 'PENDING_MODERATION' });
   }
 
   match = path.match(/^\/api\/tasks\/(\d+)\/applications$/);
@@ -594,7 +726,13 @@ async function api(req, res, url) {
     if (!user.profileCompleted) throw new ApiError(409, 'Сначала заполните профиль исполнителя');
     if (user.id === Number(task.customer_id)) throw new ApiError(409, 'Нельзя откликнуться на собственную задачу');
     if (!PUBLIC_TASK_STATUSES.includes(task.status)) throw new ApiError(409, 'Задача больше не принимает отклики');
-    if (task.deadline < localDateString()) throw new ApiError(409, 'Срок задачи уже истёк — отклики больше не принимаются');
+    if ((task.application_deadline || task.deadline) < localDateString()) {
+      if (!db.prepare("SELECT 1 FROM analytics_events WHERE name='application_deadline_reached' AND task_id=?").get(taskId)) {
+        track('application_deadline_reached', { taskId, metadata: { applicationDeadline: task.application_deadline || task.deadline } });
+      }
+      track('application_blocked_after_deadline', { userId: user.id, taskId });
+      throw new ApiError(409, 'Приём заявок завершён — новые отклики недоступны');
+    }
     const body = await readJson(req);
     const message = text(body.message, { required: true, min: 20, max: 1500, label: 'Сообщение' });
     const price = integerInRange(body.proposedPrice, 'Стоимость', { min: MIN_PROJECT_PRICE, max: MAX_PROJECT_PRICE });
@@ -604,10 +742,6 @@ async function api(req, res, url) {
         (task_id, executor_id, message, proposed_price, proposed_deadline, status, created_at)
         VALUES (?, ?, ?, ?, ?, 'SUBMITTED', ?)`)
         .run(taskId, user.id, message, price, deadline, now());
-      if (task.status === 'PUBLISHED') {
-        db.prepare(`UPDATE tasks SET status='REVIEWING', updated_at=? WHERE id=?`).run(now(), taskId);
-        recordHistory(taskId, user.id, 'REVIEWING', 'Получен первый отклик');
-      }
       const matchScore = calculateMatch(toJson(task.skills), user.skills).score;
       track('application_created', { userId: user.id, taskId, metadata: { applicationId: Number(result.lastInsertRowid), matchScore } });
       return json(res, 201, { applicationId: Number(result.lastInsertRowid) });
@@ -621,11 +755,39 @@ async function api(req, res, url) {
     const user = requireCustomer(req);
     const rows = db.prepare(`SELECT a.*, t.title AS task_title, t.skills AS task_skills,
       u.name AS executor_name, p.bio, p.skills AS profile_skills, p.experience,
-      p.location AS profile_location, p.work_format, p.desired_rate
+      p.location AS profile_location, p.work_format, p.desired_rate, p.verification_status AS executor_verification_status
       FROM applications a JOIN tasks t ON t.id=a.task_id JOIN users u ON u.id=a.executor_id
       LEFT JOIN profiles p ON p.user_id=u.id WHERE t.customer_id=? ORDER BY a.created_at DESC`).all(user.id);
     for (const row of rows) track('application_viewed', { userId: user.id, taskId: Number(row.task_id), metadata: { applicationId: Number(row.id) } });
     return json(res, 200, { applications: rows.map((row) => ({ ...parseApplication(row, toJson(row.task_skills)), taskTitle: row.task_title })) });
+  }
+
+  match = path.match(/^\/api\/applications\/(\d+)$/);
+  if (method === 'GET' && match) {
+    const user = requireUser(req);
+    const row = db.prepare(`SELECT a.*,t.title AS task_title,t.customer_id,t.skills AS task_skills,u.name AS executor_name,
+      p.bio,p.skills AS profile_skills,p.experience,p.location AS profile_location,p.work_format,p.desired_rate,p.verification_status AS executor_verification_status
+      FROM applications a JOIN tasks t ON t.id=a.task_id JOIN users u ON u.id=a.executor_id
+      LEFT JOIN profiles p ON p.user_id=u.id WHERE a.id=?`).get(Number(match[1]));
+    if (!row) throw new ApiError(404, 'Заявка не найдена');
+    if (!user.isAdmin && user.id !== Number(row.customer_id) && user.id !== Number(row.executor_id)) throw new ApiError(403, 'Нет доступа к обсуждению этой заявки');
+    const comments = db.prepare(`SELECT c.id,c.text,c.created_at,c.author_id,u.name AS author_name
+      FROM application_comments c JOIN users u ON u.id=c.author_id WHERE c.application_id=? ORDER BY c.id`).all(row.id);
+    track('application_opened', { userId: user.id, taskId: Number(row.task_id), metadata: { applicationId: Number(row.id) } });
+    return json(res, 200, { application: { ...parseApplication(row, toJson(row.task_skills)), taskTitle: row.task_title, customerId: Number(row.customer_id) }, comments, viewerId: user.id });
+  }
+
+  match = path.match(/^\/api\/applications\/(\d+)\/comments$/);
+  if (method === 'POST' && match) {
+    const user = requireUser(req);
+    const application = db.prepare(`SELECT a.id,a.executor_id,a.task_id,t.customer_id FROM applications a JOIN tasks t ON t.id=a.task_id WHERE a.id=?`).get(Number(match[1]));
+    if (!application) throw new ApiError(404, 'Заявка не найдена');
+    if (user.id !== Number(application.customer_id) && user.id !== Number(application.executor_id)) throw new ApiError(403, 'Нет доступа к обсуждению этой заявки');
+    const body = await readJson(req);
+    const comment = text(body.text, { required: true, min: 2, max: 2000, label: 'Комментарий' });
+    const result = db.prepare('INSERT INTO application_comments (application_id,author_id,text,created_at) VALUES (?,?,?,?)').run(application.id, user.id, comment, now());
+    track('application_comment_created', { userId: user.id, taskId: Number(application.task_id), metadata: { applicationId: Number(application.id), commentId: Number(result.lastInsertRowid) } });
+    return json(res, 201, { commentId: Number(result.lastInsertRowid) });
   }
 
   match = path.match(/^\/api\/applications\/(\d+)\/select$/);
@@ -635,7 +797,7 @@ async function api(req, res, url) {
     const app = db.prepare(`SELECT a.*, t.customer_id, t.status AS task_status FROM applications a JOIN tasks t ON t.id=a.task_id WHERE a.id=?`).get(applicationId);
     if (!app) throw new ApiError(404, 'Отклик не найден');
     if (user.id !== Number(app.customer_id)) throw new ApiError(403, 'Исполнителя выбирает заказчик задачи');
-    if (!PUBLIC_TASK_STATUSES.includes(app.task_status)) throw new ApiError(409, 'Для задачи уже выбран исполнитель');
+    if (app.task_status !== 'PUBLISHED') throw new ApiError(409, 'Для задачи уже выбран исполнитель');
     const timestamp = now();
     db.exec('BEGIN IMMEDIATE');
     try {
@@ -744,7 +906,10 @@ async function api(req, res, url) {
 
   if (method === 'GET' && path === '/api/admin/overview') {
     requireAdmin(req);
-    const users = db.prepare(`SELECT u.id,u.name,u.email,u.primary_role,u.is_admin,u.created_at,p.completed_at
+    const users = db.prepare(`SELECT u.id,u.name,u.email,u.primary_role,u.is_admin,u.created_at,p.*,
+      (SELECT COUNT(*) FROM tasks t WHERE t.customer_id=u.id AND t.published_at IS NOT NULL) AS published_tasks,
+      (SELECT COUNT(*) FROM tasks t WHERE t.customer_id=u.id AND t.status='CLOSED') AS completed_tasks,
+      (SELECT COUNT(*) FROM reviews r WHERE r.recipient_id=u.id) AS reviews_count
       FROM users u LEFT JOIN profiles p ON p.user_id=u.id ORDER BY u.created_at DESC`).all();
     const tasks = db.prepare(`SELECT t.*,u.name AS customer_name,
       (SELECT COUNT(*) FROM applications a WHERE a.task_id=t.id) AS application_count
@@ -752,6 +917,22 @@ async function api(req, res, url) {
     const applications = db.prepare('SELECT status, COUNT(*) AS count FROM applications GROUP BY status').all();
     const events = db.prepare('SELECT name, COUNT(*) AS count FROM analytics_events GROUP BY name ORDER BY count DESC').all();
     return json(res, 200, { users, tasks, applications, events, funnel: productMetrics(), demoFunnel: productMetrics({ demoOnly: true }) });
+  }
+
+  match = path.match(/^\/api\/admin\/profiles\/(\d+)$/);
+  if (method === 'PATCH' && match) {
+    const admin = requireAdmin(req);
+    const profileId = Number(match[1]);
+    const body = await readJson(req);
+    const target = db.prepare(`SELECT u.primary_role,p.* FROM users u JOIN profiles p ON p.user_id=u.id WHERE u.id=?`).get(profileId);
+    if (!target) throw new ApiError(404, 'Профиль не найден');
+    if (target.verification_status !== 'VERIFICATION_PENDING') throw new ApiError(409, 'Профиль не находится на проверке');
+    if (!['approve', 'reject'].includes(body.action)) throw new ApiError(422, 'Выберите подтверждение или отклонение');
+    const reason = body.action === 'reject' ? text(body.reason, { required: true, min: 5, max: 1000, label: 'Причина отклонения' }) : '';
+    const status = body.action === 'approve' ? 'VERIFIED' : 'REJECTED';
+    db.prepare('UPDATE profiles SET verification_status=?,verification_reason=?,updated_at=? WHERE user_id=?').run(status, reason, now(), profileId);
+    if (status === 'VERIFIED') track(target.primary_role === 'CUSTOMER' ? 'customer_verified' : 'executor_verified', { userId: profileId, metadata: { moderatorId: admin.id } });
+    return json(res, 200, { ok: true, status });
   }
 
   match = path.match(/^\/api\/admin\/tasks\/(\d+)$/);
@@ -766,12 +947,9 @@ async function api(req, res, url) {
     const status = body.status === undefined ? row.status : body.status;
     if (!TASK_STATUSES.includes(status)) throw new ApiError(422, 'Недопустимый статус');
     if (status !== row.status) {
-      const moderationStatuses = ['DRAFT', 'PUBLISHED', 'REVIEWING', 'REJECTED'];
+      const moderationStatuses = ['PENDING_MODERATION', 'PUBLISHED', 'REJECTED'];
       const allowedTransitions = {
-        DRAFT: ['PUBLISHED', 'REJECTED'],
-        PUBLISHED: ['REJECTED'],
-        REVIEWING: ['REJECTED'],
-        REJECTED: ['PUBLISHED'],
+        PENDING_MODERATION: ['PUBLISHED', 'REJECTED'],
       };
       if (!moderationStatuses.includes(row.status) || !allowedTransitions[row.status]?.includes(status)) {
         throw new ApiError(409, 'Модератор не может менять рабочий статус назначения. Используйте действия заказчика и исполнителя.');
@@ -779,13 +957,17 @@ async function api(req, res, url) {
       if (status === 'REJECTED') hidden = 1;
       if (status === 'PUBLISHED') hidden = 0;
     }
+    const reason = status === 'REJECTED' && status !== row.status
+      ? text(body.reason, { required: true, min: 5, max: 1000, label: 'Причина отклонения' })
+      : row.moderation_reason || '';
     const timestamp = now();
-    db.prepare(`UPDATE tasks SET is_hidden=?, status=?, published_at=CASE WHEN ?='PUBLISHED' THEN COALESCE(published_at, ?) ELSE published_at END, updated_at=? WHERE id=?`)
-      .run(hidden, status, status, timestamp, timestamp, taskId);
+    db.prepare(`UPDATE tasks SET is_hidden=?,status=?,moderation_reason=?,published_at=CASE WHEN ?='PUBLISHED' THEN COALESCE(published_at, ?) ELSE published_at END,updated_at=? WHERE id=?`)
+      .run(hidden, status, reason, status, timestamp, timestamp, taskId);
     const note = status !== row.status
       ? `Модератор изменил статус: ${row.status} → ${status}`
       : hidden !== Number(row.is_hidden) ? (hidden ? 'Скрыто модератором' : 'Снова показано модератором') : 'Проверено модератором';
     recordHistory(taskId, admin.id, status, note);
+    if (status !== row.status) track(status === 'PUBLISHED' ? 'task_approved' : 'task_rejected', { userId: admin.id, taskId, metadata: reason ? { reason } : {} });
     return json(res, 200, { ok: true });
   }
 

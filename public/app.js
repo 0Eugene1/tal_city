@@ -6,10 +6,11 @@ const toastRoot = document.querySelector('#toast-root');
 const state = { bootstrap: null, request: 0, modalReturnFocus: null };
 
 const statusLabels = {
-  DRAFT: 'Черновик', PUBLISHED: 'Опубликована', REVIEWING: 'Идёт отбор', ASSIGNED: 'Исполнитель выбран',
+  DRAFT: 'Черновик', PENDING_MODERATION: 'На модерации', PUBLISHED: 'Опубликовано · приём заявок открыт', REVIEWING: 'Приём заявок завершён', ASSIGNED: 'Исполнитель выбран',
   IN_PROGRESS: 'В работе', SUBMITTED: 'Результат отправлен', ACCEPTED: 'Результат принят',
   REJECTED: 'Отклонена', CLOSED: 'Закрыта', SHORTLISTED: 'В шорт-листе', WITHDRAWN: 'Отозван',
 };
+const verificationLabels = { PROFILE_INCOMPLETE: 'Профиль не заполнен', PROFILE_COMPLETED: 'Готов к проверке', VERIFICATION_PENDING: 'Профиль на проверке', VERIFIED: '✓ Профиль подтверждён', REJECTED: 'Профиль отклонён' };
 const formatLabels = { REMOTE: 'Удалённо', HYBRID: 'Гибрид', ONSITE: 'На месте' };
 const workSteps = ['ASSIGNED', 'IN_PROGRESS', 'SUBMITTED', 'ACCEPTED', 'CLOSED'];
 const MIN_PROJECT_PRICE = 1_000;
@@ -76,6 +77,10 @@ function statusBadge(status) {
   return `<span class="status ${String(status).toLowerCase()}">${esc(statusLabels[status] || status)}</span>`;
 }
 
+function verificationBadge(status) {
+  return `<span class="status verification ${String(status).toLowerCase()}">${esc(verificationLabels[status] || status)}</span>`;
+}
+
 function backControl(label, fallback) {
   return `<a class="back-link" href="${esc(fallback)}" data-link>← ${esc(label)}</a>`;
 }
@@ -101,6 +106,17 @@ async function api(path, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.error || 'Не удалось выполнить действие');
   return data;
+}
+
+async function uploadFile(path, file) {
+  if (file.size > 10 * 1024 * 1024) throw new Error(`${file.name}: файл больше 10 МБ`);
+  const data = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(',')[1] || '');
+    reader.onerror = () => reject(new Error(`Не удалось прочитать ${file.name}`));
+    reader.readAsDataURL(file);
+  });
+  return api(path, { method: 'POST', body: JSON.stringify({ name: file.name, mimeType: file.type, data }) });
 }
 
 function toast(message, type = '') {
@@ -130,11 +146,11 @@ function renderHeader() {
     : isExecutor(user)
       ? `<a class="user-chip user-chip--link" href="/profile/me" data-link title="Открыть профиль компетенций"><span class="avatar">${esc(initials(user.name))}</span><span>${esc(user.name)}</span></a>`
       : isCustomer(user)
-        ? `<a class="user-chip user-chip--link" href="/my-tasks" data-link title="Открыть мои задачи"><span class="avatar">${esc(initials(user.name))}</span><span>${esc(user.name)}</span></a>`
+        ? `<a class="user-chip user-chip--link" href="/profile/me" data-link title="Открыть профиль заказчика"><span class="avatar">${esc(initials(user.name))}</span><span>${esc(user.name)}</span></a>`
         : `<div class="user-chip user-chip--static" aria-label="Текущий пользователь: ${esc(user.name)}"><span class="avatar">${esc(initials(user.name))}</span><span>${esc(user.name)}</span></div>`;
   header.innerHTML = `
     <div class="header-inner">
-      <a class="brand" href="/" data-link><span class="brand-mark">Т</span><span><b>Биржа талантов</b><small>Город находит тех, кто умеет</small></span></a>
+      <a class="brand" href="/" data-link><span class="brand-mark">Т</span><span><b>Город талантов</b><small>Биржа проектов</small></span></a>
       <button class="icon-btn mobile-menu-btn" data-action="toggle-nav" aria-controls="main-nav" aria-expanded="false" aria-label="Открыть меню">☰</button>
       <nav class="nav" id="main-nav" aria-label="Основная навигация">
         <a class="${active('/tasks')}" href="/tasks" data-link>Задачи</a>
@@ -165,7 +181,7 @@ function empty(title, copy, action = '') {
 
 function taskCard(task, extra = '') {
   return `<a class="task-card" href="/tasks/${task.id}" data-link>
-    <div class="task-card-head"><span class="tag brand">${esc(task.category)}</span>${task.match ? `<span class="match-pill">${task.match.score}% по компетенциям</span>` : statusBadge(task.status)}</div>
+    <div class="task-card-head"><span class="tag brand">${esc(task.category)}</span>${task.match ? `<span class="match-pill">${task.match.score}% по компетенциям</span>` : statusBadge(task.status === 'PUBLISHED' && !task.applicationOpen ? 'REVIEWING' : task.status)}</div>
     <h3>${esc(task.title)}</h3>
     <p>${esc(task.description)}</p>
     <div class="task-meta"><span>${money(task.budget)}</span><span>до ${date(task.deadline)}</span><span>${esc(formatLabels[task.format])}</span><span>${esc(task.location)}</span></div>
@@ -188,9 +204,9 @@ function homePage() {
     <section class="hero">
       <div class="hero-inner">
         <div>
-          <p class="eyebrow">Биржа задач · Город талантов</p>
-          <h1>Задачи города находят тех, кто <em>умеет</em></h1>
-          <p class="lead">Опубликуйте реальную задачу и выберите исполнителя — или найдите проект, которому нужны именно ваши навыки.</p>
+          <p class="eyebrow">Город талантов · биржа проектов</p>
+          <h1>Талант превращается в <em>реальные проекты</em></h1>
+          <p class="lead">Городские задачи находят тех, кто умеет их решать. Опишите задачу или выберите проект, которому нужны ваши навыки.</p>
           <div class="hero-actions">${heroActions}</div>
           <div class="hero-proof"><span>Понятные условия</span><span>Подбор по навыкам</span><span>Прозрачный статус</span></div>
         </div>
@@ -256,12 +272,22 @@ function applicationModal(task) {
   requestAnimationFrame(() => modalRoot.querySelector('textarea')?.focus());
 }
 
+function attachmentModal(file) {
+  state.modalReturnFocus = document.activeElement;
+  const visual = file.mimeType === 'application/pdf'
+    ? `<iframe class="document-frame" src="${esc(file.previewUrl)}" title="Предпросмотр ${esc(file.name)}"></iframe>`
+    : file.mimeType?.startsWith('image/')
+      ? `<img class="document-image" src="${esc(file.previewUrl)}" alt="${esc(file.name)}" />`
+      : `<div class="document-text">${esc(file.previewText || 'Для этого формата доступно скачивание. Откройте файл в совместимом редакторе.')}</div>`;
+  modalRoot.innerHTML = `<div class="modal-backdrop" data-action="close-modal"><div class="modal document-modal" role="dialog" aria-modal="true" aria-labelledby="document-title"><div class="modal-head"><div><p class="eyebrow">Материал задачи</p><h2 id="document-title">${esc(file.name)}</h2><p class="muted small">${esc(file.mimeType)} · ${Math.max(1, Math.ceil(file.size / 1024))} КБ</p></div><button class="icon-btn" data-action="close-modal" aria-label="Закрыть">×</button></div>${visual}<div class="document-summary"><h3>Краткое содержание</h3><p>${esc(file.previewText || 'Описание отсутствует.')}</p></div><div class="form-actions"><button class="btn btn-secondary" type="button" data-action="close-modal">Закрыть</button><a class="btn btn-primary" href="${esc(file.url)}">Скачать файл</a></div></div></div>`;
+}
+
 function candidateCard(application, canSelect = true) {
   const person = application.executor;
   return `<article class="candidate-card">
     <a href="/profile/${person.id}" data-link><span class="avatar">${esc(initials(person.name))}</span></a>
     <div class="candidate-body"><a href="/profile/${person.id}" data-link><strong>${esc(person.name)}</strong></a><p>${esc(application.message)}</p>${tags(person.skills.slice(0, 5))}${matchDetails(application.match)}</div>
-    <div class="candidate-side"><span class="match-pill">${application.match.score}% по компетенциям</span><strong class="price" style="font-size:17px;margin-top:10px">${money(application.proposedPrice)}</strong><small class="muted">до ${date(application.proposedDeadline)}</small>${canSelect && application.status === 'SUBMITTED' ? `<button class="btn btn-primary btn-sm" data-action="select-executor" data-id="${application.id}">Выбрать исполнителя</button>` : `<div style="margin-top:10px">${statusBadge(application.status)}</div>`}</div>
+    <div class="candidate-side"><span class="match-pill">${application.match.score}% по компетенциям</span><strong class="price" style="font-size:17px;margin-top:10px">${money(application.proposedPrice)}</strong><small class="muted">до ${date(application.proposedDeadline)}</small><a class="btn btn-secondary btn-sm" href="/applications/${application.id}" data-link>Открыть заявку</a>${canSelect && application.status === 'SUBMITTED' ? `<button class="btn btn-primary btn-sm" data-action="select-executor" data-id="${application.id}">Выбрать исполнителя</button>` : `<div style="margin-top:10px">${statusBadge(application.status)}</div>`}</div>
   </article>`;
 }
 
@@ -271,7 +297,7 @@ async function taskDetailPage(id) {
   setTitle(task.title);
   const user = state.bootstrap.user;
   const isOwner = isCustomer(user) && user.id === task.customerId;
-  const showRecommendations = isOwner && ['DRAFT', 'PUBLISHED', 'REVIEWING'].includes(task.status);
+  const showRecommendations = isOwner && ['DRAFT', 'PUBLISHED'].includes(task.status);
   const workAvailable = ['ASSIGNED', 'IN_PROGRESS', 'SUBMITTED', 'ACCEPTED', 'CLOSED'].includes(task.status) && user && (isOwner || user.isAdmin || user.id === task.assignedExecutorId);
   let action = '';
   if (workAvailable) action = `<a class="btn btn-primary btn-block" href="/tasks/${task.id}/work" data-link>Открыть рабочую страницу</a>`;
@@ -284,10 +310,11 @@ async function taskDetailPage(id) {
     };
     action = `<div class="result-box small"><strong>${esc(statusLabels[data.myApplication.status] || data.myApplication.status)}</strong><br>${esc(applicationMessages[data.myApplication.status] || 'Статус отклика обновлён.')}</div><a class="btn btn-secondary btn-block" style="margin-top:8px" href="/my-tasks?tab=applied" data-link>Мои отклики</a>`;
   }
-  else if (isOwner && task.status === 'DRAFT') action = `<a class="btn btn-secondary btn-block" href="/tasks/${task.id}/edit" data-link>Редактировать черновик</a><button class="btn btn-primary btn-block" style="margin-top:8px" data-action="publish-task" data-id="${task.id}">Опубликовать задачу</button>`;
-  else if (isOwner && ['PUBLISHED', 'REVIEWING'].includes(task.status)) action = `<a class="btn btn-secondary btn-block" href="/tasks/${task.id}/edit" data-link>Редактировать задачу</a><p class="muted micro" style="margin:10px 0 0">Изменения увидят все откликнувшиеся исполнители.</p>`;
-  else if (!isOwner && ['PUBLISHED', 'REVIEWING'].includes(task.status)) {
-    if (task.expired) action = '<div class="result-box small">Срок задачи истёк — новые отклики больше не принимаются.</div>';
+  else if (isOwner && ['DRAFT','REJECTED'].includes(task.status)) action = `${task.moderationReason ? `<div class="result-box small"><strong>Причина отклонения:</strong> ${esc(task.moderationReason)}</div>` : ''}<a class="btn btn-secondary btn-block" href="/tasks/${task.id}/edit" data-link>Редактировать задачу</a><button class="btn btn-primary btn-block" style="margin-top:8px" data-action="publish-task" data-id="${task.id}">Отправить на модерацию</button>`;
+  else if (isOwner && task.status === 'PENDING_MODERATION') action = '<div class="result-box small">Задача ожидает решения модератора. До одобрения она не видна в каталоге.</div>';
+  else if (isOwner && task.status === 'PUBLISHED') action = '<div class="result-box small">Задача опубликована. Условия зафиксированы до выбора исполнителя.</div>';
+  else if (!isOwner && task.status === 'PUBLISHED') {
+    if (task.applicationDeadline < dateWithOffset(0)) action = '<div class="result-box small">Приём заявок завершён.</div>';
     else if (!user) action = `<a class="btn btn-primary btn-block" href="/login?next=/tasks/${task.id}" data-link>Войти и откликнуться</a>`;
     else if (!isExecutor(user)) action = '<div class="result-box small">Откликаться на задачи может только исполнитель.</div>';
     else if (!user.profileCompleted) action = `<a class="btn btn-primary btn-block" href="/profile/me" data-link>Заполнить профиль для отклика</a>`;
@@ -297,14 +324,15 @@ async function taskDetailPage(id) {
     ${backControl('Все задачи', '/tasks')}
     <div class="detail-grid">
       <div class="detail-main">
-        <article class="detail-hero"><div style="display:flex;justify-content:space-between;gap:12px;align-items:center">${statusBadge(task.status)}<span class="muted small">Задача №${task.id}</span></div><h1>${esc(task.title)}</h1><div class="task-context"><h2>Зачем и что нужно сделать</h2><p class="detail-copy">${esc(task.description)}</p></div>${tags(task.skills, 'brand')}</article>
+        <article class="detail-hero"><div style="display:flex;justify-content:space-between;gap:12px;align-items:center">${statusBadge(task.status === 'PUBLISHED' && !task.applicationOpen ? 'REVIEWING' : task.status)}<span class="muted small">Задача №${task.id}</span></div><h1>${esc(task.title)}</h1><div class="task-context"><h2>Зачем и что нужно сделать</h2><p class="detail-copy">${esc(task.description)}</p></div>${tags(task.skills, 'brand')}</article>
         <section class="detail-section"><h2>Что должно получиться</h2><div class="result-box">${esc(task.expectedResult)}</div></section>
+        ${data.attachments?.length ? `<section class="detail-section"><div class="section-head compact"><div><h2>Материалы</h2><p>${data.attachments.length} документа к задаче</p></div></div><div class="attachment-grid">${data.attachments.map((file) => `<article class="attachment-card"><div class="file-mark">${file.mimeType === 'application/pdf' ? 'PDF' : file.mimeType.includes('word') ? 'DOC' : 'IMG'}</div><div><strong>${esc(file.name)}</strong><small>${Math.max(1, Math.ceil(file.size / 1024))} КБ · можно посмотреть и скачать</small></div><button class="btn btn-secondary btn-sm" data-action="preview-attachment" data-file='${esc(JSON.stringify(file))}'>Развернуть</button></article>`).join('')}</div></section>` : ''}
         ${isOwner ? `<section class="detail-section"><div class="section-head" style="margin-bottom:12px"><div><h2>Отклики</h2><p>${data.applications.length ? 'Сравните условия и подтверждённые совпадения.' : 'Отклики появятся здесь после публикации.'}</p></div></div>${data.applications.length ? data.applications.map((item) => candidateCard(item, ['PUBLISHED','REVIEWING'].includes(task.status))).join('') : empty('Пока нет откликов', 'Поделитесь ссылкой на задачу с подходящими специалистами.')}</section>` : ''}
         ${showRecommendations ? `<section class="detail-section"><h2>Подходящие исполнители</h2><p class="muted">Подбор учитывает только указанные компетенции. Процент помогает сравнить профили, но не оценивает человека целиком.</p>${data.recommendations?.length ? data.recommendations.map(({ profile, match }) => `<article class="candidate-card"><a href="/profile/${profile.id}" data-link><span class="avatar">${esc(initials(profile.name))}</span></a><div class="candidate-body"><a href="/profile/${profile.id}" data-link><strong>${esc(profile.name)}</strong></a><p>${esc(profile.bio)}</p>${tags(profile.skills.slice(0,5))}${matchDetails(match)}</div><div class="candidate-side"><span class="match-pill">${match.score}% по компетенциям</span></div></article>`).join('') : empty('Пока не нашли совпадений', 'Попробуйте уточнить или расширить список компетенций. После публикации специалисты также смогут откликнуться сами.', `<a class="btn btn-secondary" href="/tasks/${task.id}/edit" data-link>Изменить требования</a>`)}</section>` : ''}
       </div>
       <aside class="sidebar">
-        <div class="side-card"><span class="price">${money(task.budget)}</span><span class="muted small">бюджет задачи</span><div class="side-list"><div><span>Срок</span><strong>${date(task.deadline)}</strong></div><div><span>Формат</span><strong>${esc(formatLabels[task.format])}</strong></div><div><span>Локация</span><strong>${esc(task.location)}</strong></div><div><span>Откликов</span><strong>${task.applicationCount || 0}</strong></div></div>${task.match ? `<div class="result-box small" style="margin-bottom:14px"><strong>${task.match.score}% по компетенциям</strong>${matchDetails(task.match)}</div>` : ''}${action}</div>
-        <div class="side-card"><p class="muted micro" style="text-transform:uppercase;letter-spacing:.08em">Заказчик</p><div class="owner"><span class="avatar">${esc(initials(task.customer.name))}</span><div><strong>${esc(task.customer.name)}</strong><small>${task.customer.publishedTasks ?? 0} опубликовано · ${task.customer.completedTasks ?? 0} завершено</small></div></div>${task.customer.memberSince ? `<p class="muted micro trust-note">На платформе с ${new Date(task.customer.memberSince).getFullYear()} года</p>` : ''}</div>
+        <div class="side-card"><span class="price">${money(task.budget)}</span><span class="muted small">бюджет задачи</span><div class="side-list"><div><span>Приём заявок до</span><strong>${date(task.applicationDeadline)}</strong></div><div><span>Срок результата</span><strong>${date(task.deadline)}</strong></div><div><span>Формат</span><strong>${esc(formatLabels[task.format])}</strong></div><div><span>Локация</span><strong>${esc(task.location)}</strong></div></div>${action}</div>
+        <div class="side-card"><p class="muted micro">Заказчик</p><div class="owner"><span class="avatar">${esc(initials(task.customer.organizationName || task.customer.name))}</span><div><strong>${esc(task.customer.organizationName || task.customer.name)}</strong>${task.customer.verified ? verificationBadge('VERIFIED') : ''}<small>${esc(task.customer.name)}${task.customer.organizationRole ? ` · ${esc(task.customer.organizationRole)}` : ''}</small></div></div><p class="muted micro">${task.customer.publishedTasks ?? 0} опубликовано · ${task.customer.completedTasks ?? 0} завершено</p><a class="text-link small" href="/profile/${task.customer.id}" data-link>Профиль заказчика</a></div>
       </aside>
     </div>
   </div>`;
@@ -313,8 +341,13 @@ async function taskDetailPage(id) {
 function taskFormPage(task = null) {
   if (!state.bootstrap.user) return authGate('Чтобы создать задачу, войдите как заказчик.');
   if (!isCustomer()) return accessDenied('Создавать и публиковать задачи может только заказчик.');
+  if (!task && state.bootstrap.user.verificationStatus !== 'VERIFIED') {
+    setTitle('Сначала подтвердите профиль');
+    app.innerHTML = `<div class="page-shell narrow">${empty('Подтвердите профиль заказчика', 'Перед первой задачей заполните данные организации и отправьте профиль модератору. Черновики и публикации станут доступны после подтверждения.', '<a class="btn btn-primary" href="/profile/me" data-link>Заполнить профиль</a> <a class="btn btn-secondary" href="/my-tasks" data-link>Мои задачи</a>')}</div>`;
+    return;
+  }
   const editing = Boolean(task);
-  const draft = task?.status === 'DRAFT';
+  const draft = ['DRAFT', 'REJECTED'].includes(task?.status);
   setTitle(editing ? 'Редактирование задачи' : 'Новая задача');
   const minDate = dateWithOffset(1);
   const maxDate = dateWithOffset(730);
@@ -329,9 +362,11 @@ function taskFormPage(task = null) {
         <div class="field-row"><div class="field"><label for="category">Категория</label><select id="category" name="category" required><option value="">Выберите</option>${state.bootstrap.categories.map((item) => `<option ${task?.category === item ? 'selected' : ''}>${esc(item)}</option>`).join('')}</select></div><div class="field"><label for="skills">Компетенции</label><input id="skills" name="skills" maxlength="600" required value="${esc(task?.skills?.join(', ') || '')}" placeholder="ESP32, IoT, Sensors" /><small>От 1 до 12 навыков через запятую</small></div></div>
       </section>
       <section class="form-section"><div class="form-section-head"><h3>Условия</h3><p>Эти данные помогут получить предметные отклики.</p></div>
-        <div class="field-row"><div class="field"><label for="budget">Бюджет, ₽</label><input id="budget" name="budget" type="number" min="${MIN_PROJECT_PRICE}" max="${MAX_PROJECT_PRICE}" step="1" required value="${task?.budget ?? ''}" placeholder="125500" /><small>Любая целая сумма от 1 000 до 100 млн ₽</small></div><div class="field"><label for="deadline">Срок результата</label><input id="deadline" name="deadline" type="text" inputmode="numeric" maxlength="10" pattern="[0-9]{2}/[0-9]{2}/[0-9]{4}" data-date-input data-min-date="${minDate}" data-max-date="${maxDate}" value="${esc(isoToInputDate(task?.deadline || ''))}" required placeholder="ДД/ММ/ГГГГ" /><small>Формат ДД/ММ/ГГГГ. Допустимо с ${date(minDate)} по ${date(maxDate)}</small></div></div>
+        <div class="field-row"><div class="field"><label for="budget">Бюджет, ₽</label><input id="budget" name="budget" type="number" min="${MIN_PROJECT_PRICE}" max="${MAX_PROJECT_PRICE}" step="1" required value="${task?.budget ?? ''}" placeholder="125500" /><small>Любая целая сумма от 1 000 до 100 млн ₽</small></div><div class="field"><label for="deadline">Срок результата</label><input id="deadline" name="deadline" type="text" inputmode="numeric" maxlength="10" pattern="[0-9]{2}/[0-9]{2}/[0-9]{4}" data-date-input data-min-date="${minDate}" data-max-date="${maxDate}" value="${esc(isoToInputDate(task?.deadline || ''))}" required placeholder="ДД/ММ/ГГГГ" /></div></div>
+        <div class="field"><label for="applicationDeadline">Приём заявок до</label><input id="applicationDeadline" name="applicationDeadline" type="text" inputmode="numeric" maxlength="10" pattern="[0-9]{2}/[0-9]{2}/[0-9]{4}" data-date-input data-min-date="${dateWithOffset(0)}" data-max-date="${task?.deadline || maxDate}" value="${esc(isoToInputDate(task?.applicationDeadline || task?.deadline || ''))}" required placeholder="ДД/ММ/ГГГГ" /><small>Не позже срока результата</small></div>
         <div class="field-row"><div class="field"><label for="location">Локация</label><input id="location" name="location" maxlength="100" required value="${esc(task?.location || 'Новосибирск')}" /></div><div class="field"><label for="format">Формат</label><select id="format" name="format" required>${state.bootstrap.formats.map((item) => `<option value="${item}" ${task?.format === item ? 'selected' : ''}>${formatLabels[item]}</option>`).join('')}</select></div></div>
-        ${!editing || draft ? `<label class="checkbox"><input type="checkbox" name="publish" ${editing ? '' : 'checked'} /><span><strong>${editing ? 'Опубликовать после сохранения' : 'Сразу опубликовать'}</strong><br>${editing ? 'После проверки задача появится в каталоге.' : 'Снимите отметку, чтобы сохранить черновик.'}</span></label>` : ''}
+        ${!editing ? '<div class="field"><label for="attachments">Материалы (PDF, DOC, DOCX, JPG, PNG, WebP · до 10 МБ)</label><input id="attachments" name="attachments" type="file" multiple accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp" /></div>' : ''}
+        ${!editing || draft ? `<label class="checkbox"><input type="checkbox" name="publish" /><span><strong>Отправить на модерацию после сохранения</strong><br>Публикация произойдёт только после одобрения модератором.</span></label>` : ''}
       </section>
       <div class="form-actions"><a class="btn btn-secondary" href="${editing ? `/tasks/${task.id}` : '/my-tasks'}" data-link>Отмена</a><button class="btn btn-primary btn-lg" type="submit">${editing ? 'Сохранить изменения' : 'Создать задачу'}</button></div>
     </form>
@@ -348,7 +383,7 @@ async function taskEditPage(id) {
   const { task } = await api(`/api/tasks/${id}`);
   const user = state.bootstrap.user;
   if (user.id !== task.customerId && !user.isAdmin) return accessDenied('Редактировать задачу может только её заказчик.');
-  if (!['DRAFT', 'PUBLISHED', 'REVIEWING'].includes(task.status)) return accessDenied('После назначения исполнителя условия задачи менять нельзя.');
+  if (!['DRAFT', 'REJECTED'].includes(task.status)) return accessDenied('После отправки на модерацию условия задачи менять нельзя.');
   return taskFormPage(task);
 }
 
@@ -367,7 +402,7 @@ function authPage(mode) {
   const register = mode === 'register';
   setTitle(register ? 'Регистрация' : 'Вход');
   app.innerHTML = `<div class="auth-shell">
-    <section class="auth-form"><div class="auth-form-inner"><p class="eyebrow">${register ? 'Новый участник' : 'С возвращением'}</p><h1>${register ? 'Начните с роли' : 'Войдите в кабинет'}</h1><p class="muted">${register ? 'Один аккаунт сможет и публиковать, и решать задачи.' : 'Продолжите работу с задачами и откликами.'}</p>
+    <section class="auth-form"><div class="auth-form-inner"><p class="eyebrow">${register ? 'Новый участник' : 'С возвращением'}</p><h1>${register ? 'Начните с роли' : 'Войдите в кабинет'}</h1><p class="muted">${register ? 'Выберите сторону участия — заказчика или исполнителя. Права ролей разделены.' : 'Продолжите работу с задачами и откликами.'}</p>
       <form id="${register ? 'register-form' : 'login-form'}">
         ${register ? `<div class="field"><label for="name">Имя или название команды</label><input id="name" name="name" minlength="2" maxlength="80" required autocomplete="name" /></div>` : ''}
         <div class="field"><label for="email">Email</label><input id="email" name="email" type="email" maxlength="160" required autocomplete="email" /></div>
@@ -384,20 +419,19 @@ function authPage(mode) {
 
 async function profilePage(id) {
   const me = id === 'me';
-  if (me && !state.bootstrap.user) return authGate('Профиль исполнителя доступен после входа.');
-  if (me && !isExecutor()) return accessDenied('Личный профиль компетенций доступен только исполнителю.');
+  if (me && !state.bootstrap.user) return authGate('Личный профиль доступен после входа.');
+  if (me && state.bootstrap.user.isAdmin) return accessDenied('Профиль модератора не участвует в бирже.');
   const data = await api(me ? '/api/profile/me' : `/api/profile/${id}`);
   const profile = data.profile;
   setTitle(me ? 'Мой профиль' : profile.name);
   if (me) {
-    app.innerHTML = `<div class="page-shell narrow">${backControl('К задачам', '/tasks')}<div class="page-title-row"><div><p class="eyebrow">Профиль исполнителя</p><h1>${profile.completed ? 'Обновите профиль' : 'Расскажите, что умеете'}</h1><p class="lead">Конкретные навыки помогают задачам найти вас.</p></div></div>
+    const customer = data.role === 'CUSTOMER';
+    const statusPanel = `<div class="result-box small" style="margin-bottom:18px">${verificationBadge(profile.verificationStatus)}${profile.verificationReason ? `<p><strong>Причина:</strong> ${esc(profile.verificationReason)}</p>` : ''}${profile.completed && !['VERIFIED','VERIFICATION_PENDING'].includes(profile.verificationStatus) ? '<button class="btn btn-secondary btn-sm" style="margin-top:10px" data-action="submit-verification">Отправить профиль на проверку</button>' : ''}</div>`;
+    app.innerHTML = `<div class="page-shell narrow">${backControl(customer ? 'Мои задачи' : 'К задачам', customer ? '/my-tasks' : '/tasks')}<div class="page-title-row"><div><p class="eyebrow">Профиль ${customer ? 'заказчика' : 'исполнителя'}</p><h1>${profile.completed ? 'Обновите профиль' : customer ? 'Расскажите о команде' : 'Расскажите, что умеете'}</h1><p class="lead">${customer ? 'Исполнители должны понимать, кто разместил задачу.' : 'Конкретные навыки и опыт помогают задачам найти вас.'}</p></div></div>${statusPanel}
       <form class="form-card" id="profile-form">
+        ${customer ? `<div class="field"><label for="organizationName">Компания / организация / проект</label><input id="organizationName" name="organizationName" minlength="2" maxlength="160" required value="${esc(profile.organizationName)}" /></div><div class="field"><label for="organizationRole">Ваша роль</label><input id="organizationRole" name="organizationRole" minlength="2" maxlength="120" required value="${esc(profile.organizationRole)}" /></div>` : `<div class="field"><label for="specialization">Специализация</label><input id="specialization" name="specialization" minlength="2" maxlength="120" required value="${esc(profile.specialization)}" placeholder="Backend Developer" /></div>`}
         <div class="field"><label for="bio">О себе</label><textarea id="bio" name="bio" minlength="20" maxlength="1000" required placeholder="Какую пользу вы приносите проектам?">${esc(profile.bio)}</textarea></div>
-        <div class="field"><label for="skills">Компетенции</label><input id="skills" name="skills" maxlength="600" value="${esc((Array.isArray(profile.skills) ? profile.skills : []).join(', '))}" required placeholder="Python, ROS2, Computer Vision" /><small>От 1 до 12 конкретных навыков через запятую</small></div>
-        <div class="field"><label for="experience">Опыт</label><textarea id="experience" name="experience" minlength="20" maxlength="2000" required placeholder="Проекты, результаты, годы опыта">${esc(profile.experience)}</textarea></div>
-        <div class="field"><label for="portfolio">Портфолио</label><input id="portfolio" name="portfolio" maxlength="500" value="${esc(profile.portfolio)}" placeholder="Ссылка или короткое описание" /></div>
-        <div class="field-row"><div class="field"><label for="location">Локация</label><input id="location" name="location" maxlength="100" value="${esc(profile.location)}" required /></div><div class="field"><label for="workFormat">Формат работы</label><select id="workFormat" name="workFormat">${state.bootstrap.formats.map((item) => `<option value="${item}" ${profile.workFormat === item ? 'selected' : ''}>${formatLabels[item]}</option>`).join('')}</select></div></div>
-        <div class="field-row"><div class="field"><label for="availability">Доступность</label><input id="availability" name="availability" maxlength="200" value="${esc(profile.availability)}" required placeholder="Готов начать через неделю" /></div><div class="field"><label for="desiredRate">Желаемая ставка, ₽/час</label><input id="desiredRate" name="desiredRate" type="number" min="${MIN_HOURLY_RATE}" max="${MAX_HOURLY_RATE}" step="100" value="${profile.desiredRate ?? ''}" /><small>Необязательно, от 100 до 100 000 ₽</small></div></div>
+        ${customer ? `<div class="field-row"><div class="field"><label for="location">Город</label><input id="location" name="location" maxlength="100" value="${esc(profile.location)}" required /></div><div class="field"><label for="contact">Рабочий email или контакт</label><input id="contact" name="contact" maxlength="200" value="${esc(profile.contact)}" required /></div></div><div class="field"><label for="website">Сайт / страница организации</label><input id="website" name="website" type="url" maxlength="500" value="${esc(profile.website)}" placeholder="https://…" /></div>` : `<div class="field"><label for="skills">Компетенции</label><input id="skills" name="skills" maxlength="600" value="${esc((Array.isArray(profile.skills) ? profile.skills : []).join(', '))}" required placeholder="Python, ROS2, Computer Vision" /></div><div class="field"><label for="experience">Опыт</label><textarea id="experience" name="experience" minlength="20" maxlength="2000" required>${esc(profile.experience)}</textarea></div><div class="field-row"><div class="field"><label for="github">GitHub</label><input id="github" name="github" type="url" value="${esc(profile.github)}" placeholder="https://github.com/…" /></div><div class="field"><label for="portfolio">Портфолио</label><input id="portfolio" name="portfolio" maxlength="500" value="${esc(profile.portfolio)}" /></div></div><div class="field-row"><div class="field"><label for="location">Локация</label><input id="location" name="location" maxlength="100" value="${esc(profile.location)}" required /></div><div class="field"><label for="workFormat">Формат работы</label><select id="workFormat" name="workFormat">${state.bootstrap.formats.map((item) => `<option value="${item}" ${profile.workFormat === item ? 'selected' : ''}>${formatLabels[item]}</option>`).join('')}</select></div></div><div class="field-row"><div class="field"><label for="availability">Доступность</label><input id="availability" name="availability" maxlength="200" value="${esc(profile.availability)}" required /></div><div class="field"><label for="desiredRate">Ставка, ₽/час</label><input id="desiredRate" name="desiredRate" type="number" min="${MIN_HOURLY_RATE}" max="${MAX_HOURLY_RATE}" value="${profile.desiredRate ?? ''}" /></div></div><div class="field"><label for="resume">Резюме (PDF, DOC, DOCX · до 10 МБ)</label><input id="resume" name="resume" type="file" accept=".pdf,.doc,.docx" />${data.resume ? `<small>Загружено: <a class="text-link" href="${data.resume.url}">${esc(data.resume.original_name || data.resume.name)}</a></small>` : ''}</div>`}
         <div class="form-actions"><button class="btn btn-primary btn-lg" type="submit">Сохранить профиль</button></div>
       </form></div>`;
     return;
@@ -405,9 +439,10 @@ async function profilePage(id) {
   const reviews = data.reviews || [];
   const stats = data.stats || { assignments: 0, completedTasks: 0, activeTasks: 0, reviewsCount: reviews.length, averageRating: null };
   const average = stats.averageRating === null ? null : Number(stats.averageRating).toFixed(1);
-  app.innerHTML = `<div class="page-shell medium">${backControl('Назад', '/tasks')}<section class="profile-hero"><span class="avatar lg">${esc(initials(profile.name))}</span><div><p class="eyebrow">Исполнитель</p><h1>${esc(profile.name)}</h1><p class="muted">${esc(profile.location || 'Локация не указана')} · ${esc(formatLabels[profile.workFormat])}${average ? ` · <span class="rating">★ ${average}</span>` : ''}</p></div></section>
+  const customer = profile.role === 'CUSTOMER';
+  app.innerHTML = `<div class="page-shell medium">${backControl('Назад', '/tasks')}<section class="profile-hero"><span class="avatar lg">${esc(initials(profile.name))}</span><div><p class="eyebrow">${customer ? 'Заказчик' : 'Исполнитель'}</p><h1>${esc(customer ? profile.organizationName || profile.name : profile.name)}</h1>${verificationBadge(profile.verificationStatus)}<p class="muted">${esc(profile.location || 'Локация не указана')}${!customer ? ` · ${esc(formatLabels[profile.workFormat])}${average ? ` · <span class="rating">★ ${average}</span>` : ''}` : ''}</p></div></section>
     <div class="trust-stats"><div><strong>${stats.completedTasks}</strong><span>задач завершено</span></div><div><strong>${stats.activeTasks}</strong><span>сейчас в работе</span></div><div><strong>${stats.reviewsCount}</strong><span>отзывов</span></div></div>
-    <div class="profile-grid"><div class="panel"><h2>О специалисте</h2><p class="detail-copy">${esc(profile.bio || 'Описание пока не заполнено.')}</p><h3>Компетенции</h3>${tags(profile.skills, 'brand')}<h3 style="margin-top:25px">Опыт</h3><p class="detail-copy">${esc(profile.experience || 'Не указан')}</p>${profile.portfolio ? `<h3 style="margin-top:25px">Портфолио</h3><p>${esc(profile.portfolio)}</p>` : ''}</div>
+    <div class="profile-grid"><div class="panel"><h2>${customer ? 'Об организации' : 'О специалисте'}</h2><p class="detail-copy">${esc(profile.bio || 'Описание пока не заполнено.')}</p>${customer ? `<h3>Представитель</h3><p>${esc(profile.name)} · ${esc(profile.organizationRole)}</p>` : `<h3>Компетенции</h3>${tags(profile.skills, 'brand')}<h3 style="margin-top:25px">Опыт</h3><p class="detail-copy">${esc(profile.experience || 'Не указан')}</p>${profile.github ? `<p><a class="text-link" href="${esc(profile.github)}" target="_blank" rel="noopener">GitHub ↗</a></p>` : ''}${data.resume ? `<p><a class="text-link" href="${data.resume.url}">Скачать резюме</a></p>` : ''}`}</div>
       <aside><div class="side-card"><h3>Доступность</h3><p class="muted small">${esc(profile.availability || 'Не указана')}</p>${profile.desiredRate ? `<span class="price" style="font-size:22px">${money(profile.desiredRate)}<small class="muted"> / час</small></span>` : ''}</div><div class="side-card" style="margin-top:16px"><h3>Отзывы · ${reviews.length}</h3>${reviews.length ? reviews.map((review) => `<article class="review"><span class="rating">${'★'.repeat(review.rating)}${'☆'.repeat(5-review.rating)}</span><p>${esc(review.text)}</p><small>${esc(review.author_name)} · ${esc(review.task_title)}</small></article>`).join('') : '<p class="muted small">Первый отзыв появится после завершённой задачи.</p>'}</div></aside>
     </div></div>`;
 }
@@ -420,6 +455,17 @@ async function applicationsPage() {
   app.innerHTML = `<div class="page-shell medium">${backControl('Мои задачи', '/my-tasks')}<div class="page-title-row"><div><p class="eyebrow">Кабинет заказчика</p><h1>Отклики</h1><p class="lead">Сравните подход, условия и совпадение компетенций.</p></div></div>
     ${data.applications.length ? `<div class="panel">${data.applications.map((item) => `<div style="margin-bottom:7px"><a class="text-link small" href="/tasks/${item.taskId}" data-link>${esc(item.taskTitle)}</a></div>${candidateCard(item, true)}`).join('')}</div>` : empty('Откликов пока нет', 'После публикации задачи предложения исполнителей появятся здесь.', '<a class="btn btn-primary" href="/tasks/create" data-link>Создать задачу</a>')}
   </div>`;
+}
+
+async function applicationDetailPage(id) {
+  if (!state.bootstrap.user) return authGate('Обсуждение заявки доступно участникам после входа.');
+  const data = await api(`/api/applications/${id}`);
+  const item = data.application;
+  setTitle(`Заявка: ${item.taskTitle}`);
+  app.innerHTML = `<div class="page-shell medium">${backControl('Назад к заявкам', isCustomer() ? '/applications' : '/my-tasks?tab=applied')}
+    <div class="page-title-row"><div><p class="eyebrow">Приватная заявка</p><h1>${esc(item.taskTitle)}</h1><p class="lead">Обсуждение видно только заказчику и автору отклика.</p></div>${statusBadge(item.status)}</div>
+    <div class="profile-grid"><section class="panel"><h2>Предложение</h2>${candidateCard(item, false)}<h2 style="margin-top:28px">Обсуждение</h2><div class="timeline">${data.comments.length ? data.comments.map((comment) => `<div class="timeline-item"><strong>${esc(comment.author_name)}</strong><span>${esc(comment.text)}</span><small>${dateTime(comment.created_at)}</small></div>`).join('') : '<p class="muted">Задайте первый уточняющий вопрос.</p>'}</div><form id="comment-form" data-application-id="${item.id}" style="margin-top:20px"><div class="field"><label for="commentText">Комментарий</label><textarea id="commentText" name="text" minlength="2" maxlength="2000" required placeholder="Уточните детали, сроки или подход"></textarea></div><button class="btn btn-primary" type="submit">Отправить</button></form></section>
+    <aside class="side-card"><h3>Исполнитель</h3><p><strong>${esc(item.executor.name)}</strong></p>${verificationBadge(item.executor.verificationStatus || 'PROFILE_COMPLETED')}<a class="btn btn-secondary btn-block" href="/profile/${item.executor.id}" data-link>Открыть профиль</a></aside></div></div>`;
 }
 
 function taskSection(title, copy, items, emptyCopy, emptyAction) {
@@ -509,8 +555,8 @@ async function adminPage() {
     <div class="admin-stats"><div class="metric"><strong>${data.users.length}</strong><span>пользователей</span></div><div class="metric"><strong>${completedProfiles}</strong><span>заполненных профилей</span></div><div class="metric"><strong>${data.funnel.assignments}</strong><span>назначений</span></div><div class="metric"><strong>${data.funnel.medianFirstRelevantHours === null ? '—' : `${data.funnel.medianFirstRelevantHours} ч`}</strong><span>медиана до подходящего кандидата</span></div></div>
     <section class="panel" style="margin-bottom:22px"><h2>Воронка реального пилота</h2><p class="muted small">Демо-аккаунты исключены. Подходящий кандидат — профиль с совпадением не ниже ${data.funnel.relevantMatchThreshold}% по указанным компетенциям.</p><div class="stats-inner" style="width:100%;grid-template-columns:repeat(5,1fr);overflow:auto"><div class="stat"><strong>${data.funnel.publishedTasks}</strong><span>опубликовано</span></div><div class="stat"><strong>${data.funnel.tasksWithApplications}</strong><span>получили отклики</span></div><div class="stat"><strong>${data.funnel.tasksWithRelevantCandidates}</strong><span>получили подходящих</span></div><div class="stat"><strong>${data.funnel.assignments}</strong><span>назначения</span></div><div class="stat"><strong>${data.funnel.completions}</strong><span>завершения</span></div></div></section>
     <section class="panel demo-metrics" style="margin-bottom:22px"><div><h2>Демонстрационный цикл</h2><p class="muted small">Отдельный контрольный набор: ${data.demoFunnel.publishedTasks} задач, ${data.demoFunnel.tasksWithApplications} с откликами, ${data.demoFunnel.assignments} назначение, ${data.demoFunnel.completions} завершение. Медиана до подходящего кандидата — ${data.demoFunnel.medianFirstRelevantHours ?? '—'} ч.</p></div><a class="btn btn-secondary btn-sm" href="/tasks/1/work" data-link>Показать завершённую работу</a></section>
-    <section><div class="section-head" style="margin-bottom:15px"><div><h2 style="font-size:28px">Задачи</h2><p>Модератор публикует черновики и управляет видимостью. Рабочие статусы меняются только действиями участников.</p></div></div><div class="table-wrap"><table><thead><tr><th>Задача</th><th>Заказчик</th><th>Статус</th><th>Отклики</th><th>Модерация</th></tr></thead><tbody>${data.tasks.map((task) => `<tr><td><a class="text-link" href="/tasks/${task.id}" data-link>${esc(task.title)}</a></td><td>${esc(task.customer.name)}</td><td>${statusBadge(task.status)}</td><td>${task.applicationCount}</td><td>${['DRAFT','REJECTED'].includes(task.status) ? `<button class="btn btn-primary btn-sm" data-action="admin-publish" data-id="${task.id}">Опубликовать</button>` : `<button class="btn ${task.hidden ? 'btn-primary' : 'btn-secondary'} btn-sm" data-action="admin-toggle" data-id="${task.id}" data-hidden="${task.hidden}">${task.hidden ? 'Показать' : 'Скрыть'}</button>`}</td></tr>`).join('')}</tbody></table></div></section>
-    <section style="margin-top:30px"><div class="section-head" style="margin-bottom:15px"><div><h2 style="font-size:28px">Пользователи</h2><p>Участники пилота и полнота профиля.</p></div></div><div class="table-wrap"><table><thead><tr><th>Имя</th><th>Email</th><th>Роль</th><th>Профиль</th></tr></thead><tbody>${data.users.map((user) => `<tr><td>${esc(user.name)}</td><td>${esc(user.email)}</td><td>${user.is_admin ? 'Модератор' : user.primary_role === 'CUSTOMER' ? 'Заказчик' : 'Исполнитель'}</td><td>${user.completed_at ? statusBadge('ACCEPTED') : '<span class="muted">Не заполнен</span>'}</td></tr>`).join('')}</tbody></table></div></section>
+    <section><div class="section-head"><div><h2>Задачи</h2><p>Очереди: на модерации · опубликованные · отклонённые.</p></div></div><div class="table-wrap"><table><thead><tr><th>Задача</th><th>Заказчик</th><th>Статус</th><th>Отклики</th><th>Решение</th></tr></thead><tbody>${data.tasks.map((task) => `<tr><td><a class="text-link" href="/tasks/${task.id}" data-link>${esc(task.title)}</a>${task.moderationReason ? `<small class="error-text">${esc(task.moderationReason)}</small>` : ''}</td><td>${esc(task.customer.name)}</td><td>${statusBadge(task.status)}</td><td>${task.applicationCount}</td><td>${task.status === 'PENDING_MODERATION' ? `<div class="admin-actions"><button class="btn btn-primary btn-sm" data-action="admin-publish" data-id="${task.id}">Одобрить</button><button class="btn btn-secondary btn-sm" data-action="admin-reject-task" data-id="${task.id}">Отклонить</button></div>` : '—'}</td></tr>`).join('')}</tbody></table></div></section>
+    <section style="margin-top:30px"><div class="section-head"><div><h2>Профили</h2><p>Очереди: на проверке · подтверждённые · отклонённые.</p></div></div><div class="table-wrap"><table><thead><tr><th>Пользователь</th><th>Организация / специализация</th><th>Роль и город</th><th>Статус</th><th>Решение</th></tr></thead><tbody>${data.users.filter((user) => !user.is_admin).map((user) => `<tr><td><a class="text-link" href="/profile/${user.id}" data-link>${esc(user.name)}</a><small>${esc(user.email)}</small></td><td>${esc(user.organization_name || user.specialization || '—')}</td><td>${user.primary_role === 'CUSTOMER' ? 'Заказчик' : 'Исполнитель'} · ${esc(user.location || '—')}</td><td>${verificationBadge(user.verification_status || 'PROFILE_INCOMPLETE')}${user.verification_reason ? `<small class="error-text">${esc(user.verification_reason)}</small>` : ''}</td><td>${user.verification_status === 'VERIFICATION_PENDING' ? `<div class="admin-actions"><button class="btn btn-primary btn-sm" data-action="admin-profile" data-decision="approve" data-id="${user.id}">Подтвердить</button><button class="btn btn-secondary btn-sm" data-action="admin-profile" data-decision="reject" data-id="${user.id}">Отклонить</button></div>` : '—'}</td></tr>`).join('')}</tbody></table></div></section>
   </div>`;
 }
 
@@ -535,6 +581,7 @@ async function render() {
     else if (path === '/register') authPage('register');
     else if (/^\/profile\/(me|\d+)$/.test(path)) await profilePage(path.split('/')[2]);
     else if (path === '/applications') await applicationsPage();
+    else if (/^\/applications\/\d+$/.test(path)) await applicationDetailPage(path.split('/')[2]);
     else if (path === '/my-tasks') await myTasksPage();
     else if (path === '/admin') await adminPage();
     else notFoundPage();
@@ -686,8 +733,11 @@ document.addEventListener('click', async (event) => {
       navigate(demoTarget); toast('Демо-режим включён');
     } else if (action === 'clear-filters') navigate('/tasks');
     else if (action === 'open-application') applicationModal(JSON.parse(actionEl.dataset.task));
+    else if (action === 'preview-attachment') attachmentModal(JSON.parse(actionEl.dataset.file));
     else if (action === 'publish-task') {
-      actionBusy(actionEl); await api(`/api/tasks/${actionEl.dataset.id}/publish`, { method: 'POST', body: '{}' }); toast('Задача опубликована'); await refreshBootstrap(); render();
+      actionBusy(actionEl); await api(`/api/tasks/${actionEl.dataset.id}/publish`, { method: 'POST', body: '{}' }); toast('Задача отправлена на модерацию'); await refreshBootstrap(); render();
+    } else if (action === 'submit-verification') {
+      actionBusy(actionEl); await api('/api/profile/me/submit-verification', { method: 'POST', body: '{}' }); await refreshBootstrap(); toast('Профиль отправлен на проверку'); render();
     } else if (action === 'select-executor') {
       if (!confirm('Назначить этого исполнителя? Остальные отклики будут отклонены.')) return;
       actionBusy(actionEl); const result = await api(`/api/applications/${actionEl.dataset.id}/select`, { method: 'POST', body: '{}' }); toast('Исполнитель выбран'); navigate(`/tasks/${result.taskId}/work`);
@@ -711,6 +761,13 @@ document.addEventListener('click', async (event) => {
     } else if (action === 'admin-publish') {
       if (!confirm('Опубликовать задачу в общем каталоге?')) return;
       actionBusy(actionEl); await api(`/api/admin/tasks/${actionEl.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ status: 'PUBLISHED' }) }); toast('Задача опубликована'); render();
+    } else if (action === 'admin-reject-task') {
+      const reason = prompt('Укажите причину отклонения задачи:'); if (!reason) return;
+      actionBusy(actionEl); await api(`/api/admin/tasks/${actionEl.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ status: 'REJECTED', reason }) }); toast('Задача отклонена'); render();
+    } else if (action === 'admin-profile') {
+      const approve = actionEl.dataset.decision === 'approve';
+      const reason = approve ? '' : prompt('Укажите причину отклонения профиля:'); if (!approve && !reason) return;
+      actionBusy(actionEl); await api(`/api/admin/profiles/${actionEl.dataset.id}`, { method: 'PATCH', body: JSON.stringify({ action: approve ? 'approve' : 'reject', reason }) }); toast(approve ? 'Профиль подтверждён' : 'Профиль отклонён'); render();
     }
   } catch (error) { resetAction(actionEl); toast(error.message, 'error'); }
 });
@@ -733,20 +790,29 @@ document.addEventListener('submit', async (event) => {
       navigate(next?.startsWith('/') && !next.startsWith('//') ? next : defaultTarget); toast('Вы вошли');
     } else if (form.id === 'register-form') {
       await api('/api/auth/register', { method: 'POST', body: JSON.stringify(data) }); await refreshBootstrap();
-      navigate(data.role === 'EXECUTOR' ? '/profile/me' : '/tasks/create'); toast('Аккаунт создан');
+      navigate('/profile/me'); toast('Аккаунт создан — заполните профиль');
     } else if (form.id === 'task-form') {
-      const payload = { ...data, deadline: inputDateToIso(data.deadline), skills: data.skills.split(',').map((item) => item.trim()).filter(Boolean), publish: new FormData(form).has('publish') };
+      const files = [...(form.elements.attachments?.files || [])];
+      const payload = { ...data, deadline: inputDateToIso(data.deadline), applicationDeadline: inputDateToIso(data.applicationDeadline), skills: data.skills.split(',').map((item) => item.trim()).filter(Boolean), publish: new FormData(form).has('publish') };
+      delete payload.attachments;
       if (form.dataset.taskId) {
         const taskId = form.dataset.taskId;
         await api(`/api/tasks/${taskId}`, { method: 'PUT', body: JSON.stringify(payload) });
         if (payload.publish) await api(`/api/tasks/${taskId}/publish`, { method: 'POST', body: '{}' });
         await refreshBootstrap(); navigate(`/tasks/${taskId}`); toast(payload.publish ? 'Изменения сохранены, задача опубликована' : 'Изменения сохранены');
       } else {
-        const result = await api('/api/tasks', { method: 'POST', body: JSON.stringify(payload) }); await refreshBootstrap(); navigate(`/tasks/${result.taskId}`); toast(result.status === 'PUBLISHED' ? 'Задача опубликована' : 'Черновик сохранён');
+        const result = await api('/api/tasks', { method: 'POST', body: JSON.stringify(payload) });
+        for (const file of files) await uploadFile(`/api/tasks/${result.taskId}/attachments`, file);
+        if (payload.publish) await api(`/api/tasks/${result.taskId}/publish`, { method: 'POST', body: '{}' });
+        await refreshBootstrap(); navigate(`/tasks/${result.taskId}`); toast(payload.publish ? 'Задача отправлена на модерацию' : 'Черновик сохранён');
       }
     } else if (form.id === 'profile-form') {
-      const payload = { ...data, skills: data.skills.split(',').map((item) => item.trim()).filter(Boolean) };
-      await api('/api/profile/me', { method: 'PUT', body: JSON.stringify(payload) }); await refreshBootstrap(); toast('Профиль сохранён'); navigate('/tasks');
+      const resume = form.elements.resume?.files?.[0];
+      const payload = { ...data, skills: data.skills ? data.skills.split(',').map((item) => item.trim()).filter(Boolean) : [] };
+      delete payload.resume;
+      await api('/api/profile/me', { method: 'PUT', body: JSON.stringify(payload) });
+      if (resume) await uploadFile('/api/profile/me/resume', resume);
+      await refreshBootstrap(); toast('Профиль сохранён — отправьте его на проверку'); render();
     } else if (form.id === 'application-form') {
       data.proposedDeadline = inputDateToIso(data.proposedDeadline);
       await api(`/api/tasks/${form.dataset.taskId}/applications`, { method: 'POST', body: JSON.stringify(data) }); modalRoot.innerHTML = ''; toast('Отклик отправлен. Заказчик увидит его среди кандидатов'); navigate('/my-tasks?tab=applied');
@@ -756,6 +822,8 @@ document.addEventListener('submit', async (event) => {
       await api(`/api/tasks/${form.dataset.taskId}/work/revise`, { method: 'POST', body: JSON.stringify(data) }); modalRoot.innerHTML = ''; toast('Задача возвращена в работу'); render();
     } else if (form.id === 'review-form') {
       await api(`/api/tasks/${form.dataset.taskId}/reviews`, { method: 'POST', body: JSON.stringify(data) }); toast('Отзыв опубликован'); render();
+    } else if (form.id === 'comment-form') {
+      await api(`/api/applications/${form.dataset.applicationId}/comments`, { method: 'POST', body: JSON.stringify(data) }); toast('Комментарий отправлен'); render();
     }
   } catch (error) { toast(error.message, 'error'); showFormError(form, error.message); busy(form, false); }
 });
