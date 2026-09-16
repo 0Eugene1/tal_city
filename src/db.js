@@ -40,6 +40,7 @@ db.exec(`
     specialization TEXT NOT NULL DEFAULT '',
     verification_status TEXT NOT NULL DEFAULT 'PROFILE_INCOMPLETE' CHECK (verification_status IN ('PROFILE_INCOMPLETE','PROFILE_COMPLETED','VERIFICATION_PENDING','VERIFIED','REJECTED')),
     verification_reason TEXT NOT NULL DEFAULT '',
+    verification_submitted_at TEXT,
     completed_at TEXT,
     updated_at TEXT NOT NULL
   );
@@ -170,6 +171,7 @@ for (const [column, definition] of [
   ['linkedin', "TEXT NOT NULL DEFAULT ''"], ['specialization', "TEXT NOT NULL DEFAULT ''"],
   ['verification_status', "TEXT NOT NULL DEFAULT 'PROFILE_INCOMPLETE'"],
   ['verification_reason', "TEXT NOT NULL DEFAULT ''"],
+  ['verification_submitted_at', 'TEXT'],
 ]) {
   if (!hasColumn('profiles', column)) db.exec(`ALTER TABLE profiles ADD COLUMN ${column} ${definition}`);
 }

@@ -28,6 +28,13 @@ const MAX_HOURLY_RATE = 100_000;
 const MAX_TASK_HORIZON_DAYS = 730;
 const RELEVANT_MATCH_SCORE = 50;
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
+const CITIES = [
+  'Абакан', 'Барнаул', 'Бердск', 'Екатеринбург', 'Иркутск', 'Кемерово', 'Красноярск',
+  'Москва', 'Новокузнецк', 'Новосибирск', 'Омск', 'Санкт-Петербург', 'Томск', 'Тюмень',
+];
+const PASSWORD_PATTERN_SOURCE = '^(?=.*[A-Za-z])(?=.*\\d)[\\x21-\\x7E]{8,100}$';
+const PASSWORD_PATTERN = new RegExp(PASSWORD_PATTERN_SOURCE);
+const PASSWORD_MESSAGE = 'Пароль должен содержать от 8 до 100 символов, хотя бы одну латинскую букву и цифру. Допустимы латинские буквы, цифры и специальные символы без пробелов.';
 const ALLOWED_FILES = new Map([
   ['application/pdf', '.pdf'], ['application/msword', '.doc'],
   ['application/vnd.openxmlformats-officedocument.wordprocessingml.document', '.docx'],
@@ -61,12 +68,31 @@ async function readJson(req) {
   try { return JSON.parse(raw); } catch { throw new ApiError(400, 'Некорректный JSON'); }
 }
 
-function text(value, { required = false, min = 0, max = 5000, label = 'Поле' } = {}) {
+function text(value, { required = false, min = 0, max = 5000, label = 'Поле', requiredMessage = '', minMessage = '', maxMessage = '' } = {}) {
   const result = String(value ?? '').trim();
-  if (required && !result) throw new ApiError(422, `${label}: заполните поле`);
-  if (result.length < min) throw new ApiError(422, `${label}: минимум ${min} символа`);
-  if (result.length > max) throw new ApiError(422, `${label}: максимум ${max} символов`);
+  if (required && !result) throw new ApiError(422, requiredMessage || `${label}: заполните обязательное поле`);
+  if (result && result.length < min) throw new ApiError(422, minMessage || `${label}: минимальная длина — ${min} символов`);
+  if (result.length > max) throw new ApiError(422, maxMessage || `${label}: максимальная длина — ${max} символов`);
   return result;
+}
+
+function validEmail(value) {
+  const email = text(value, { required: true, max: 160, label: 'Email' }).toLowerCase();
+  if (!/^\S+@\S+\.\S+$/.test(email)) throw new ApiError(422, 'Введите корректный email');
+  return email;
+}
+
+function validPassword(value) {
+  const password = typeof value === 'string' ? value : '';
+  if (!PASSWORD_PATTERN.test(password)) throw new ApiError(422, PASSWORD_MESSAGE);
+  return password;
+}
+
+function validCity(value) {
+  const city = text(value, { required: true, max: 100, label: 'Город' });
+  const canonical = CITIES.find((item) => item.toLocaleLowerCase('ru-RU') === city.toLocaleLowerCase('ru-RU'));
+  if (!canonical) throw new ApiError(422, 'Выберите город из списка');
+  return canonical;
 }
 
 function integerInRange(value, label, { min = 0, max = Number.MAX_SAFE_INTEGER } = {}) {
@@ -202,6 +228,7 @@ function parseProfile(row) {
     gitlab: row.gitlab || '', linkedin: row.linkedin || '', specialization: row.specialization || '',
     verificationStatus: row.verification_status || 'PROFILE_INCOMPLETE',
     verificationReason: row.verification_reason || '',
+    verificationSubmittedAt: row.verification_submitted_at || null,
     completed: Boolean(row.completed_at),
     completedAt: row.completed_at || null,
   };
@@ -366,7 +393,7 @@ function validateTask(body) {
     budget: integerInRange(body.budget, 'Бюджет', { min: MIN_PROJECT_PRICE, max: MAX_PROJECT_PRICE }),
     deadline,
     applicationDeadline,
-    location: text(body.location, { required: true, max: 100, label: 'Локация' }),
+    location: validCity(body.location),
     format,
   };
 }
@@ -422,16 +449,15 @@ async function api(req, res, url) {
       (SELECT COUNT(*) FROM tasks WHERE status='PUBLISHED' AND is_hidden = 0 AND deadline >= ?) AS tasks,
       (SELECT COUNT(*) FROM profiles p JOIN users u ON u.id=p.user_id WHERE u.primary_role='EXECUTOR' AND p.verification_status='VERIFIED') AS executors,
       (SELECT COUNT(*) FROM assignments) AS assignments`).get(localDateString());
-    return json(res, 200, { user, categories: CATEGORIES, formats: FORMATS, stats });
+    return json(res, 200, { user, categories: CATEGORIES, formats: FORMATS, cities: CITIES, passwordPattern: PASSWORD_PATTERN_SOURCE, passwordMessage: PASSWORD_MESSAGE, stats });
   }
 
   if (method === 'POST' && path === '/api/auth/register') {
     const body = await readJson(req);
     const name = text(body.name, { required: true, min: 2, max: 80, label: 'Имя' });
-    const email = text(body.email, { required: true, max: 160, label: 'Email' }).toLowerCase();
-    const password = text(body.password, { required: true, min: 8, max: 100, label: 'Пароль' });
+    const email = validEmail(body.email);
+    const password = validPassword(body.password);
     const role = body.role === 'CUSTOMER' ? 'CUSTOMER' : body.role === 'EXECUTOR' ? 'EXECUTOR' : null;
-    if (!/^\S+@\S+\.\S+$/.test(email)) throw new ApiError(422, 'Введите корректный email');
     if (!role) throw new ApiError(422, 'Выберите роль');
     try {
       const createdAt = now();
@@ -449,7 +475,7 @@ async function api(req, res, url) {
 
   if (method === 'POST' && path === '/api/auth/login') {
     const body = await readJson(req);
-    const email = text(body.email, { required: true, max: 160, label: 'Email' }).toLowerCase();
+    const email = validEmail(body.email);
     const password = text(body.password, { required: true, max: 100, label: 'Пароль' });
     const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
     if (!user || !verifyPassword(password, user.password_hash)) throw new ApiError(401, 'Неверный email или пароль');
@@ -472,20 +498,24 @@ async function api(req, res, url) {
   if (method === 'PUT' && path === '/api/profile/me') {
     const user = requireUser(req);
     if (user.isAdmin) throw new ApiError(403, 'Профиль модератора не участвует в бирже');
+    const current = db.prepare('SELECT verification_status FROM profiles WHERE user_id = ?').get(user.id);
+    if (current?.verification_status === 'VERIFICATION_PENDING') {
+      throw new ApiError(409, 'Профиль находится на проверке и временно недоступен для редактирования.');
+    }
     const body = await readJson(req);
     const customer = user.primaryRole === 'CUSTOMER';
     const profile = customer ? {
-      bio: text(body.bio, { required: true, min: 20, max: 1000, label: 'Описание организации' }),
+      bio: text(body.bio, { min: 20, max: 1000, label: 'Рассказ о команде', minMessage: 'Расскажите о команде подробнее — минимум 20 символов.', maxMessage: 'Рассказ о команде: максимальная длина — 1000 символов.' }),
       skills: [], experience: '', portfolio: '',
-      location: text(body.location, { required: true, max: 100, label: 'Город' }), workFormat: 'REMOTE', availability: '', desiredRate: null,
+      location: validCity(body.location), workFormat: 'REMOTE', availability: '', desiredRate: null,
       organizationName: text(body.organizationName, { required: true, min: 2, max: 160, label: 'Организация' }),
       organizationRole: text(body.organizationRole, { required: true, min: 2, max: 120, label: 'Роль' }),
       contact: text(body.contact, { required: true, min: 3, max: 200, label: 'Рабочий контакт' }),
       website: optionalHttpUrl(body.website, 'Сайт'), github: '', gitlab: '', linkedin: '', specialization: '',
     } : {
-      bio: text(body.bio, { required: true, min: 20, max: 1000, label: 'О себе' }),
+      bio: text(body.bio, { required: true, min: 20, max: 1000, label: 'О себе', minMessage: 'Расскажите о себе подробнее — минимум 20 символов.', maxMessage: 'О себе: максимальная длина — 1000 символов.' }),
       skills: list(body.skills), experience: text(body.experience, { required: true, min: 20, max: 2000, label: 'Опыт' }),
-      portfolio: text(body.portfolio, { max: 500, label: 'Портфолио' }), location: text(body.location, { required: true, max: 100, label: 'Локация' }),
+      portfolio: text(body.portfolio, { max: 500, label: 'Портфолио' }), location: validCity(body.location),
       workFormat: FORMATS.includes(body.workFormat) ? body.workFormat : null,
       availability: text(body.availability, { required: true, max: 200, label: 'Доступность' }),
       desiredRate: body.desiredRate === '' || body.desiredRate === null ? null : integerInRange(body.desiredRate, 'Ставка', { min: MIN_HOURLY_RATE, max: MAX_HOURLY_RATE }),
@@ -506,7 +536,8 @@ async function api(req, res, url) {
       organization_role=excluded.organization_role,contact=excluded.contact,website=excluded.website,github=excluded.github,
       gitlab=excluded.gitlab,linkedin=excluded.linkedin,specialization=excluded.specialization,
       verification_status=CASE WHEN profiles.verification_status='VERIFIED' THEN 'VERIFIED' ELSE 'PROFILE_COMPLETED' END,
-      verification_reason='',completed_at=COALESCE(profiles.completed_at,excluded.completed_at),updated_at=excluded.updated_at`)
+      verification_reason='',verification_submitted_at=CASE WHEN profiles.verification_status='VERIFIED' THEN profiles.verification_submitted_at ELSE NULL END,
+      completed_at=COALESCE(profiles.completed_at,excluded.completed_at),updated_at=excluded.updated_at`)
       .run(user.id, profile.bio, JSON.stringify(profile.skills), profile.experience, profile.portfolio,
         profile.location, profile.workFormat, profile.availability, profile.desiredRate, profile.organizationName,
         profile.organizationRole, profile.contact, profile.website, profile.github, profile.gitlab, profile.linkedin,
@@ -519,14 +550,21 @@ async function api(req, res, url) {
     const user = requireUser(req);
     const profile = db.prepare('SELECT * FROM profiles WHERE user_id=?').get(user.id);
     if (!profile?.completed_at) throw new ApiError(409, 'Сначала заполните обязательные поля профиля');
+    if (profile.verification_status === 'VERIFICATION_PENDING') throw new ApiError(409, 'Профиль уже находится на проверке.');
     if (profile.verification_status === 'VERIFIED') throw new ApiError(409, 'Профиль уже подтверждён');
-    db.prepare("UPDATE profiles SET verification_status='VERIFICATION_PENDING',verification_reason='',updated_at=? WHERE user_id=?").run(now(), user.id);
+    if (profile.verification_status !== 'PROFILE_COMPLETED') throw new ApiError(409, 'Сначала сохраните исправленный профиль');
+    const submittedAt = now();
+    db.prepare("UPDATE profiles SET verification_status='VERIFICATION_PENDING',verification_reason='',verification_submitted_at=?,updated_at=? WHERE user_id=?").run(submittedAt, submittedAt, user.id);
     track(user.primaryRole === 'CUSTOMER' ? 'customer_verification_submitted' : 'executor_verification_submitted', { userId: user.id });
     return json(res, 200, { ok: true, status: 'VERIFICATION_PENDING' });
   }
 
   if (method === 'POST' && path === '/api/profile/me/resume') {
     const user = requireExecutor(req);
+    const profile = db.prepare('SELECT verification_status FROM profiles WHERE user_id=?').get(user.id);
+    if (profile?.verification_status === 'VERIFICATION_PENDING') {
+      throw new ApiError(409, 'Профиль находится на проверке и временно недоступен для редактирования.');
+    }
     const file = validateUpload(await readJson(req), { resume: true });
     db.exec('BEGIN IMMEDIATE');
     try {
@@ -558,6 +596,12 @@ async function api(req, res, url) {
     const file = db.prepare('SELECT * FROM attachments WHERE id=?').get(Number(attachmentMatch[1]));
     if (!file) throw new ApiError(404, 'Вложение не найдено');
     if (!user.isAdmin && Number(file.owner_id) !== user.id) throw new ApiError(403, 'Удалить вложение может только владелец');
+    if (!user.isAdmin && file.kind === 'RESUME') {
+      const profile = db.prepare('SELECT verification_status FROM profiles WHERE user_id=?').get(user.id);
+      if (profile?.verification_status === 'VERIFICATION_PENDING') {
+        throw new ApiError(409, 'Профиль находится на проверке и временно недоступен для редактирования.');
+      }
+    }
     db.prepare('DELETE FROM attachments WHERE id=?').run(file.id);
     return json(res, 200, { ok: true });
   }
@@ -593,14 +637,22 @@ async function api(req, res, url) {
     return json(res, 200, { profile: { ...parseProfile(row), role: row.primary_role, memberSince: row.member_since }, reviews, stats, resume: resumeRow ? attachmentMeta(resumeRow) : null });
   }
 
+  if (method === 'GET' && path === '/api/tasks/suggestions') {
+    const query = text(url.searchParams.get('q'), { max: 80, label: 'Поиск' }).toLocaleLowerCase('ru-RU');
+    const rows = db.prepare(`SELECT id,title FROM tasks
+      WHERE status='PUBLISHED' AND is_hidden=0 AND deadline>=? ORDER BY published_at DESC`).all(localDateString());
+    const suggestions = rows
+      .filter((row) => !query || row.title.toLocaleLowerCase('ru-RU').startsWith(query))
+      .slice(0, 8)
+      .map((row) => ({ id: Number(row.id), title: row.title }));
+    return json(res, 200, { suggestions });
+  }
+
   if (method === 'GET' && path === '/api/tasks') {
     const user = sessionUser(req);
     const where = [`t.status='PUBLISHED'`, 't.is_hidden = 0', 't.deadline >= ?'];
     const params = [localDateString()];
-    if (url.searchParams.get('q')) {
-      where.push('(t.title LIKE ? OR t.description LIKE ? OR t.skills LIKE ?)');
-      const q = `%${url.searchParams.get('q').slice(0, 80)}%`; params.push(q, q, q);
-    }
+    const searchQuery = (url.searchParams.get('q') || '').slice(0, 80).trim().toLocaleLowerCase('ru-RU');
     if (url.searchParams.get('category')) { where.push('t.category = ?'); params.push(url.searchParams.get('category')); }
     if (url.searchParams.get('skill')) { where.push('t.skills LIKE ?'); params.push(`%${url.searchParams.get('skill').slice(0, 50)}%`); }
     if (url.searchParams.get('format')) { where.push('t.format = ?'); params.push(url.searchParams.get('format')); }
@@ -610,7 +662,11 @@ async function api(req, res, url) {
     const rows = db.prepare(`SELECT t.*, u.name AS customer_name,
       (SELECT COUNT(*) FROM applications a WHERE a.task_id=t.id AND a.status!='WITHDRAWN') AS application_count
       FROM tasks t JOIN users u ON u.id=t.customer_id WHERE ${where.join(' AND ')} ORDER BY t.published_at DESC`).all(...params);
-    const tasks = rows.map((row) => {
+    const visibleRows = searchQuery
+      ? rows.filter((row) => [row.title, row.description, row.skills]
+        .some((value) => String(value || '').toLocaleLowerCase('ru-RU').includes(searchQuery)))
+      : rows;
+    const tasks = visibleRows.map((row) => {
       const task = parseTask(row);
       if (user?.profileCompleted) task.match = calculateMatch(task.skills, user.skills);
       return task;
@@ -620,6 +676,7 @@ async function api(req, res, url) {
 
   if (method === 'POST' && path === '/api/tasks') {
     const user = requireCustomer(req);
+    if (user.verificationStatus !== 'VERIFIED') throw new ApiError(409, 'Создавать задачи можно только после подтверждения профиля заказчика.');
     const body = await readJson(req);
     const task = validateTask(body);
     const status = 'DRAFT';
@@ -907,6 +964,8 @@ async function api(req, res, url) {
   if (method === 'GET' && path === '/api/admin/overview') {
     requireAdmin(req);
     const users = db.prepare(`SELECT u.id,u.name,u.email,u.primary_role,u.is_admin,u.created_at,p.*,
+      (SELECT a.id FROM attachments a WHERE a.owner_id=u.id AND a.kind='RESUME' ORDER BY a.id DESC LIMIT 1) AS resume_id,
+      (SELECT a.original_name FROM attachments a WHERE a.owner_id=u.id AND a.kind='RESUME' ORDER BY a.id DESC LIMIT 1) AS resume_name,
       (SELECT COUNT(*) FROM tasks t WHERE t.customer_id=u.id AND t.published_at IS NOT NULL) AS published_tasks,
       (SELECT COUNT(*) FROM tasks t WHERE t.customer_id=u.id AND t.status='CLOSED') AS completed_tasks,
       (SELECT COUNT(*) FROM reviews r WHERE r.recipient_id=u.id) AS reviews_count

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -88,6 +88,11 @@ test('демо-данные показывают подбор, доверие, �
   const smartTask = myTasks.created.find((task) => task.title === 'Автономная система контроля заполненности урн');
   assert.ok(smartTask);
   assert.equal(smartTask.status, 'PUBLISHED');
+
+  const suggestions = await customer.request('/api/tasks/suggestions?q=%D0%B0%D0%B2%D1%82');
+  assert.equal(suggestions.suggestions[0].title, smartTask.title);
+  const lowercaseSearch = await customer.request('/api/tasks?q=%D0%B0%D0%B2%D1%82');
+  assert.ok(lowercaseSearch.tasks.some((task) => task.id === smartTask.id));
 
   const smartDetail = await customer.request(`/api/tasks/${smartTask.id}`);
   assert.deepEqual(smartDetail.applications.map((item) => item.match.score), [100, 75, 25]);
@@ -260,6 +265,7 @@ test('даты, суммы, права и статусные переходы з
   await assert.rejects(customer.request('/api/tasks', { method: 'POST', body: { ...baseTask, budget: '1e100' } }), /Бюджет/);
   await assert.rejects(customer.request('/api/tasks', { method: 'POST', body: { ...baseTask, budget: 999999999999999 } }), /Бюджет/);
   await assert.rejects(customer.request('/api/tasks', { method: 'POST', body: { ...baseTask, skills: [] } }), /хотя бы один навык/);
+  await assert.rejects(customer.request('/api/tasks', { method: 'POST', body: { ...baseTask, location: 'Кеме' } }), /Выберите город из списка/);
 
   const created = await customer.request('/api/tasks', { method: 'POST', body: baseTask });
   await customer.request(`/api/tasks/${created.taskId}/publish`, { method: 'POST' });
@@ -346,14 +352,19 @@ test('доверие, премодерация, вложения, дедлайн
     bio: 'Фонд запускает прикладные городские инициативы вместе с локальными командами.',
     contact: `trust-c-${suffix}@test.city`, website: 'https://example.test/fund',
   }});
-  const draft = await customer.request('/api/tasks', { method: 'POST', body: {
+  const draftPayload = {
     title: 'Подготовить открытый городской отчёт',
     description: 'Нужно собрать данные проекта и подготовить понятный интерактивный отчёт для жителей города.',
     expectedResult: 'Опубликованный отчёт, исходные данные и инструкция обновления.', category: 'IT', skills: ['Node.js'],
     budget: 80000, applicationDeadline: futureDate(10), deadline: futureDate(20), location: 'Новосибирск', format: 'REMOTE',
-  }});
-  await assert.rejects(customer.request(`/api/tasks/${draft.taskId}/publish`, { method: 'POST' }), /после подтверждения профиля/);
+  };
+  await assert.rejects(customer.request('/api/tasks', { method: 'POST', body: draftPayload }), /только после подтверждения профиля/);
   await customer.request('/api/profile/me/submit-verification', { method: 'POST' });
+  await assert.rejects(customer.request('/api/tasks', { method: 'POST', body: draftPayload }), /только после подтверждения профиля/);
+  await admin.request('/api/auth/login', { method: 'POST', body: { email: 'admin@talent.city', password: 'demo1234' } });
+  const customerId = Number(db.prepare('SELECT id FROM users WHERE email=?').get(`trust-c-${suffix}@test.city`).id);
+  await admin.request(`/api/admin/profiles/${customerId}`, { method: 'PATCH', body: { action: 'approve' } });
+  const draft = await customer.request('/api/tasks', { method: 'POST', body: draftPayload });
 
   await executor.request('/api/auth/register', { method: 'POST', body: {
     name: 'Игорь Исполнитель', email: `trust-e-${suffix}@test.city`, password: 'testpass123', role: 'EXECUTOR',
@@ -373,10 +384,6 @@ test('доверие, премодерация, вложения, дедлайн
   await assert.rejects(executor.request('/api/profile/me/resume', { method: 'POST', body: {
     name: 'resume.png', mimeType: 'image/png', data: Buffer.from('image').toString('base64'),
   }}), /Недопустимый тип файла/);
-
-  await admin.request('/api/auth/login', { method: 'POST', body: { email: 'admin@talent.city', password: 'demo1234' } });
-  const customerId = Number(db.prepare('SELECT id FROM users WHERE email=?').get(`trust-c-${suffix}@test.city`).id);
-  await admin.request(`/api/admin/profiles/${customerId}`, { method: 'PATCH', body: { action: 'approve' } });
 
   await assert.rejects(customer.request('/api/tasks', { method: 'POST', body: {
     title: 'Некорректный дедлайн заявки', description: 'Проверяем обязательное ограничение последовательности дат для новой задачи.',
@@ -435,6 +442,95 @@ test('доверие, премодерация, вложения, дедлайн
   for (const name of ['task_attachment_uploaded', 'task_submitted_for_moderation', 'task_approved', 'application_opened', 'application_comment_created', 'application_deadline_reached', 'application_blocked_after_deadline']) assert.ok(events.includes(name), name);
 });
 
+test('русская валидация и строгий lifecycle профиля работают для обеих ролей', async () => {
+  const suffix = Date.now();
+  const invalid = client();
+  await assert.rejects(invalid.request('/api/auth/register', { method: 'POST', body: {
+    name: 'Проверка пароля', email: `password-${suffix}@test.city`, password: 'Password!', role: 'CUSTOMER',
+  }}), /Пароль должен содержать/);
+  await assert.rejects(invalid.request('/api/auth/register', { method: 'POST', body: {
+    name: 'Проверка кириллицы', email: `cyrillic-${suffix}@test.city`, password: 'Пароль123!', role: 'CUSTOMER',
+  }}), /латинск/);
+  await assert.rejects(invalid.request('/api/auth/register', { method: 'POST', body: {
+    name: 'Проверка email', email: 'некорректный-email', password: 'Password123!', role: 'CUSTOMER',
+  }}), /Введите корректный email/);
+
+  const customer = client();
+  await customer.request('/api/auth/register', { method: 'POST', body: {
+    name: 'Кемеровская команда', email: `lifecycle-c-${suffix}@test.city`, password: 'Password123!', role: 'CUSTOMER',
+  }});
+  await assert.rejects(customer.request('/api/profile/me', { method: 'PUT', body: {
+    organizationName: 'Городская лаборатория', organizationRole: 'Руководитель', location: 'Несуществующий город',
+    bio: '', contact: `lifecycle-c-${suffix}@test.city`, website: '',
+  }}), /Выберите город из списка/);
+  await customer.request('/api/profile/me', { method: 'PUT', body: {
+    organizationName: 'Городская лаборатория', organizationRole: 'Руководитель', location: 'кемерово',
+    bio: '', contact: `lifecycle-c-${suffix}@test.city`, website: '',
+  }});
+  let customerProfile = (await customer.request('/api/profile/me')).profile;
+  assert.equal(customerProfile.location, 'Кемерово');
+  assert.equal(customerProfile.bio, '');
+  assert.equal(customerProfile.verificationStatus, 'PROFILE_COMPLETED');
+
+  await customer.request('/api/profile/me/submit-verification', { method: 'POST' });
+  customerProfile = (await customer.request('/api/profile/me')).profile;
+  assert.equal(customerProfile.verificationStatus, 'VERIFICATION_PENDING');
+  assert.ok(customerProfile.verificationSubmittedAt);
+  await assert.rejects(customer.request('/api/tasks', { method: 'POST', body: {
+    title: 'Попытка создать черновик', description: 'Проверяем запрет создания задачи, пока модератор проверяет профиль организации.',
+    expectedResult: 'Сервер отклоняет создание черновика.', category: 'IT', skills: ['Node.js'], budget: 50000,
+    applicationDeadline: futureDate(10), deadline: futureDate(20), location: 'Кемерово', format: 'REMOTE',
+  }}), /только после подтверждения профиля/);
+  await assert.rejects(customer.request('/api/profile/me', { method: 'PUT', body: {
+    organizationName: 'Подменённая организация', organizationRole: 'Руководитель', location: 'Кемерово',
+    bio: '', contact: `lifecycle-c-${suffix}@test.city`, website: '',
+  }}), /находится на проверке/);
+  await assert.rejects(customer.request('/api/profile/me/submit-verification', { method: 'POST' }), /уже находится на проверке/);
+  assert.equal((await customer.request('/api/profile/me')).profile.organizationName, 'Городская лаборатория');
+
+  const admin = client();
+  await admin.request('/api/auth/login', { method: 'POST', body: { email: 'admin@talent.city', password: 'demo1234' } });
+  const customerId = Number(db.prepare('SELECT id FROM users WHERE email=?').get(`lifecycle-c-${suffix}@test.city`).id);
+  let overview = await admin.request('/api/admin/overview');
+  const pendingCustomer = overview.users.find((user) => Number(user.id) === customerId);
+  assert.equal(pendingCustomer.location, 'Кемерово');
+  assert.ok(pendingCustomer.verification_submitted_at);
+  await admin.request(`/api/admin/profiles/${customerId}`, { method: 'PATCH', body: { action: 'reject', reason: 'Уточните роль представителя организации.' } });
+  assert.equal((await customer.request('/api/profile/me')).profile.verificationStatus, 'REJECTED');
+  await assert.rejects(customer.request('/api/profile/me/submit-verification', { method: 'POST' }), /Сначала сохраните исправленный профиль/);
+  await customer.request('/api/profile/me', { method: 'PUT', body: {
+    organizationName: 'Городская лаборатория', organizationRole: 'Директор проектов', location: 'Кемерово',
+    bio: '', contact: `lifecycle-c-${suffix}@test.city`, website: '',
+  }});
+  assert.equal((await customer.request('/api/profile/me')).profile.verificationStatus, 'PROFILE_COMPLETED');
+  await customer.request('/api/profile/me/submit-verification', { method: 'POST' });
+  await admin.request(`/api/admin/profiles/${customerId}`, { method: 'PATCH', body: { action: 'approve' } });
+  assert.equal((await customer.request('/api/profile/me')).profile.verificationStatus, 'VERIFIED');
+
+  const executor = client();
+  await executor.request('/api/auth/register', { method: 'POST', body: {
+    name: 'Исполнитель lifecycle', email: `lifecycle-e-${suffix}@test.city`, password: 'Password123!', role: 'EXECUTOR',
+  }});
+  const executorProfile = {
+    specialization: 'Разработчик', bio: 'Слишком коротко', skills: ['Node.js'],
+    experience: 'Более пяти лет создаю и проверяю городские цифровые сервисы.', portfolio: '', github: '',
+    location: 'Новокузнецк', workFormat: 'REMOTE', availability: 'Готов начать через неделю', desiredRate: 1800,
+  };
+  await assert.rejects(executor.request('/api/profile/me', { method: 'PUT', body: executorProfile }), /Расскажите о себе подробнее — минимум 20 символов/);
+  executorProfile.bio = 'Разрабатываю понятные цифровые сервисы и поддерживаю их после запуска.';
+  await executor.request('/api/profile/me', { method: 'PUT', body: executorProfile });
+  await executor.request('/api/profile/me/submit-verification', { method: 'POST' });
+  await assert.rejects(executor.request('/api/profile/me', { method: 'PUT', body: executorProfile }), /находится на проверке/);
+  await assert.rejects(executor.request('/api/profile/me/resume', { method: 'POST', body: {
+    name: 'resume.pdf', mimeType: 'application/pdf', data: Buffer.from('%PDF-1.4').toString('base64'),
+  }}), /находится на проверке/);
+  const executorId = Number(db.prepare('SELECT id FROM users WHERE email=?').get(`lifecycle-e-${suffix}@test.city`).id);
+  await admin.request(`/api/admin/profiles/${executorId}`, { method: 'PATCH', body: { action: 'approve' } });
+  assert.equal((await executor.request('/api/profile/me')).profile.verificationStatus, 'VERIFIED');
+  overview = await admin.request('/api/admin/overview');
+  assert.ok(overview.users.some((user) => Number(user.id) === executorId && user.specialization === 'Разработчик'));
+});
+
 test('критичные клиентские маршруты и страницы ошибок доступны через SPA', async () => {
   for (const path of ['/', '/tasks', '/tasks/create', '/tasks/1', '/tasks/1/edit', '/profile/1', '/applications', '/applications/1', '/my-tasks', '/tasks/1/work', '/admin', '/does-not-exist']) {
     const response = await fetch(`${baseUrl}${path}`);
@@ -453,10 +549,43 @@ test('критичные клиентские маршруты и страниц
   assert.match(clientScript, /user-chip user-chip--link/);
   assert.match(clientScript, /user-chip user-chip--static/);
   assert.match(clientScript, /href="\/profile\/me" data-link title="Открыть профиль заказчика"/);
+  assert.match(clientScript, /data-city-select/);
+  assert.match(clientScript, /task-city-options/);
+  assert.match(clientScript, /Выберите город из списка/);
+  assert.match(clientScript, /data-segmented-date/);
+  assert.match(clientScript, /data-date-part="day"/);
+  assert.match(clientScript, /data-date-part="month"/);
+  assert.match(clientScript, /data-date-part="year"/);
+  assert.match(clientScript, /ДД\/ММ\/ГГГГ/);
+  assert.match(clientScript, /syncSegmentedDate/);
+  assert.match(clientScript, /dateSegmentMessage/);
+  assert.doesNotMatch(clientScript, /name="deadline" type="date"/);
+  assert.match(clientScript, /После сохранения задача уйдёт на модерацию/);
+  assert.match(clientScript, /Создать и отправить/);
+  assert.doesNotMatch(clientScript, /name="publish"/);
+  assert.doesNotMatch(clientScript, /payload\.publish/);
+  assert.match(clientScript, /\/my-tasks\?profileSubmitted=1/);
+  assert.match(clientScript, /\/tasks\?profileSubmitted=1/);
+  assert.match(clientScript, /Профиль на проверке/);
+  assert.match(clientScript, /form-card" id="profile-form" novalidate/);
+  assert.match(clientScript, /data-action="toggle-filters"/);
+  assert.match(clientScript, /data-task-search/);
+  assert.match(clientScript, /task-title-suggestions/);
+  assert.match(clientScript, /api\/tasks\/suggestions/);
   assert.doesNotMatch(clientScript, /const accountHref/);
+  const formOpenings = clientScript.match(/<form\b[^>]*>/g) || [];
+  assert.ok(formOpenings.length >= 8);
+  assert.ok(formOpenings.every((opening) => opening.includes('novalidate')));
+  assert.doesNotMatch(clientScript, /Please fill out this field|Invalid password|Password is too short|Invalid input|Expected string|Expected number|Invalid email|String must contain/);
+  const serverScript = readFileSync(join(process.cwd(), 'src/server.js'), 'utf8');
+  assert.doesNotMatch(serverScript, /Please fill out this field|Invalid password|Password is too short|Invalid input|Expected string|Expected number|Invalid email|String must contain/);
   const styles = await (await fetch(`${baseUrl}/styles.css`)).text();
   assert.match(styles, /Keep responsive rules last/);
   assert.match(styles, /\.hero-inner \{ grid-template-columns: minmax\(0, 1fr\); gap: 44px; \}/);
   assert.match(styles, /html, body \{ max-width: 100%; overflow-x: hidden; \}/);
+  assert.match(styles, /@media \(max-width: 480px\)/);
+  assert.match(styles, /\.profile-readonly dl \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  assert.match(styles, /\.filter-search-row/);
+  assert.match(styles, /\.filter-options\[hidden\] \{ display: none; \}/);
   await assert.rejects(client().request('/api/tasks/999999999'), /Задача не найдена/);
 });
